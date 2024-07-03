@@ -13,7 +13,7 @@ actions:
   targets: null
   update: true
 backend: qibolab
-platform: dummy
+platform: qw11q
 targets:
 - D1
 - D2
