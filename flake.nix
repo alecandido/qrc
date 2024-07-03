@@ -19,7 +19,11 @@
       imports = [inputs.devenv.flakeModule];
       systems = nixpkgs.lib.systems.flakeExposed;
 
-      perSystem = {pkgs, ...}: {
+      perSystem = {
+        pkgs,
+        config,
+        ...
+      }: {
         packages.default = pkgs.poetry2nix.mkPoetryApplication {
           projectDir = self;
           preferWheels = true;
@@ -27,6 +31,10 @@
 
         devenv.shells.default = {
           packages = with pkgs; [pre-commit poethepoet];
+
+          env = {
+            QIBOLAB_PLATFORMS = config.devenv.shells.default.env.DEVENV_ROOT + "/qibolab_platforms_qrc";
+          };
 
           languages.python = {
             enable = true;
