@@ -1,9 +1,11 @@
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:qiboteam/qibocal.git
+	branch = manage-output
 [submodule "qibolab"]
 	path = qibolab
 	url = git@github.com:qiboteam/qibolab.git
 [submodule "qibolab_platforms_qrc"]
 	path = qibolab_platforms_qrc
 	url = git@github.com:qiboteam/qibolab_platforms_qrc.git
+	branch = qw11q-sweetspots
