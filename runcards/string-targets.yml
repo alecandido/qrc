@@ -1,0 +1,23 @@
+actions:
+- id: qubit flux dependence
+  operation: qubit_flux
+  parameters:
+    bias_step: 0.004
+    bias_width: 0.2
+    drive_amplitude: 0.007
+    drive_duration: 1000
+    freq_step: 250000
+    freq_width: 20000000
+    nshots: 1000
+    relaxation_time: 10000
+  targets: null
+  update: true
+backend: qibolab
+platform: qw11q
+targets:
+- D1
+- D2
+- D3
+- D4
+- D5
+update: true
