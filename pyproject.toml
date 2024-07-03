@@ -6,7 +6,9 @@ authors = ["Alessandro Candido <candido.ale@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.9,<3.12"
+qibolab = {path = "qibolab", develop = true}
+qibocal = {path = "qibocal", develop = true}
 
 [tool.poetry.group.dev]
 optional = true
