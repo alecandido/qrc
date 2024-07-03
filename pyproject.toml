@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "qrcli"
+name = "qrc"
 version = "0.1.0"
 description = ""
 authors = ["Alessandro Candido <candido.ale@gmail.com>"]
