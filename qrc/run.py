@@ -1,5 +1,7 @@
 """Run."""
 
+import base64
+import random
 from pathlib import Path
 
 from fabric import Connection
@@ -12,13 +14,17 @@ def run(c: Connection, commands: str):
 
 
 SBATCH = "sbatched"
+SBATCH_DIR = Path.home() / SBATCH
+
+
+def _random_name() -> str:
+    return base64.urlsafe_b64encode(random.randbytes(20)).decode()
 
 
 def sbatch(c: Connection, script: str, queue: str = "qw5q_platinum"):
     """Sbatch."""
-    sbatch_dir = Path.home() / SBATCH
-    path = sbatch_dir / "ciao"
-
+    folder = SBATCH_DIR / _random_name()
+    path = folder / "sbatch.sh"
     path.write_text(script)
 
     c.run(f"sbatch -p {queue} {path}")
