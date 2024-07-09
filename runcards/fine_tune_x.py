@@ -33,6 +33,8 @@ meta.start()
 
 completed = single_shot_classification(nshots=1000)
 
+meta.end()
+
 # stop and disconnect platform
 platform.disconnect()
 
