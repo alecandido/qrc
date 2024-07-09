@@ -1,6 +1,7 @@
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:qiboteam/qibocal.git
+	branch = import-from-executor
 [submodule "qibolab"]
 	path = qibolab
 	url = git@github.com:qiboteam/qibolab.git
