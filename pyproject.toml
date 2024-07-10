@@ -28,6 +28,9 @@ optional = true
 [tool.poetry.group.test.dependencies]
 pytest = "^7.2.3"
 
+[tool.poetry.scripts]
+qrc = "qrc.cli:run"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
