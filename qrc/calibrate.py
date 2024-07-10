@@ -1,5 +1,6 @@
 """Run calibration."""
 
+import inspect
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +8,7 @@ from typing import Optional
 def setup(branch: Optional[str] = None):
     """Set up instructions."""
     switch = f"git switch {branch}" if branch is not None else ""
-    return f"""
+    commands = f"""
     git clone git@github.com:alecandido/qrc
     cd qrc/
     {switch}
@@ -15,6 +16,7 @@ def setup(branch: Optional[str] = None):
     git submodule update
     poetry install --with dev
     """
+    return inspect.cleandoc(commands).replace("\n\n", "\n")
 
 
 def calibrate(path: Path):
