@@ -1,6 +1,7 @@
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:qiboteam/qibocal.git
+	branch = manage-output
 [submodule "qibolab"]
 	path = qibolab
 	url = git@github.com:qiboteam/qibolab.git
