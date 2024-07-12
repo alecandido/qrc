@@ -1,0 +1,11 @@
+platform: qw5q_platinum/
+
+actions:
+  - id: qubit spectroscopy
+    operation: qubit_spectroscopy
+    parameters:
+      drive_duration: 36
+      freq_width: 10_000_000
+      freq_step: 100_000
+      nshots: 1024
+      relaxation_time: 0
