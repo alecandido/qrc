@@ -18,6 +18,7 @@ actions:
       min_amp_factor: 0.2
       max_amp_factor: 1.
       step_amp_factor: 0.01
+      pulse_length: 36
 
   - id: rabi length
     operation: rabi_length_signal
