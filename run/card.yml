@@ -8,8 +8,8 @@ actions:
     operation: qubit_spectroscopy
     parameters:
       drive_duration: 36
-      freq_width: 10_000_000
-      freq_step: 100_000
+      freq_width: 100_000_000
+      freq_step: 500_000
       relaxation_time: 0
 
   - id: rabi amplitude
