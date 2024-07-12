@@ -1,4 +1,4 @@
-platform: qw5q_platinum/
+platform: qw5q_platinum
 
 actions:
   - id: qubit spectroscopy
