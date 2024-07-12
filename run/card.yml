@@ -1,13 +1,13 @@
 platform: qw5q_platinum
 
 nshots: 1000
-relaxation_time: 1000
+relaxation_time: 2000
 
 actions:
   - id: qubit spectroscopy
     operation: qubit_spectroscopy
     parameters:
-      drive_duration: 36
+      drive_duration: 1000
       freq_width: 100_000_000
       freq_step: 500_000
       relaxation_time: 0
@@ -16,8 +16,8 @@ actions:
     operation: rabi_amplitude_signal
     parameters:
       min_amp_factor: 0.2
-      max_amp_factor: 1.
-      step_amp_factor: 0.01
+      max_amp_factor: 2.
+      step_amp_factor: 0.02
       pulse_length: 36
 
   - id: rabi length
