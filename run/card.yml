@@ -1,28 +1,37 @@
 platform: qw5q_platinum
 
-nshots: 1000
+nshots: 2000
 relaxation_time: 8000
 
 actions:
+  - id: resonator spectroscopy
+    operation: resonator_spectroscopy
+    parameters:
+      freq_width: 60_000_000
+      freq_step: 400_000
+      amplitude: 0.6
+      power_level: low
+      relaxation_time: 10000
+
   - id: qubit spectroscopy
     operation: qubit_spectroscopy
     parameters:
-      drive_duration: 8000
+      drive_duration: 20000
       freq_width: 100_000_000
-      freq_step: 2_000_000
-      relaxation_time: 0
+      freq_step: 1_000_000
+      relaxation_time: 10000
 
-  - id: rabi amplitude
-    operation: rabi_amplitude_signal
-    parameters:
-      min_amp_factor: 0.2
-      max_amp_factor: 2.
-      step_amp_factor: 0.08
-      pulse_length: 36
-
-  - id: rabi length
-    operation: rabi_length_signal
-    parameters:
-      pulse_duration_start: 16
-      pulse_duration_end: 100
-      pulse_duration_step: 4
+  # - id: rabi amplitude
+  #   operation: rabi_amplitude_signal
+  #   parameters:
+  #     min_amp_factor: 0.2
+  #     max_amp_factor: 2.
+  #     step_amp_factor: 0.08
+  #     pulse_length: 36
+  #
+  # - id: rabi length
+  #   operation: rabi_length_signal
+  #   parameters:
+  #     pulse_duration_start: 16
+  #     pulse_duration_end: 100
+  #     pulse_duration_step: 4
