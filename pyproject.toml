@@ -19,7 +19,7 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pdbpp = "^0.10.3"
 ipython = "^8.12.0"
-qibolab = { path = "qibolab", develop = true }
+qibolab = { path = "qibolab", develop = true, extras = ["qm", "zh"] }
 qibocal = { path = "qibocal", develop = true }
 
 [tool.poetry.group.test]
