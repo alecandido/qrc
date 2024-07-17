@@ -1,0 +1,11 @@
+platform: qw11q
+targets: ["D2"]
+
+actions:
+  - id: standard rb
+    operation: standard_rb
+    parameters:
+      depths: [1, 5]
+      niter: 2
+      nshots: 500
+      seed: 1234
