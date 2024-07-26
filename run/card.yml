@@ -1,11 +1,7 @@
-platform: qw11q
-targets: ["D2"]
+platform: spinq10q_12_zcu111
 
 actions:
-  - id: standard rb
-    operation: standard_rb
+  - id: single shot classification
+    operation: single_shot_classification
     parameters:
-      depths: [1, 5]
-      niter: 2
-      nshots: 500
-      seed: 1234
+      nshots: 4000
