@@ -1,3 +1,7 @@
+[submodule "qibo"]
+	path = qibo
+	url = git@github.com:qiboteam/qibo.git
+	shallow = true
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:qiboteam/qibocal.git
