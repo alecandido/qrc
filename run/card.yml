@@ -1,4 +1,4 @@
-platform: qw11q
+platform: qw11qD
 
 actions:
   - id: single shot classification
