@@ -1,4 +1,4 @@
-platform: spinq10q_12_zcu111
+platform: qw11q
 
 actions:
   - id: single shot classification
