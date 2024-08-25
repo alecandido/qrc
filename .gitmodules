@@ -10,8 +10,8 @@
 [submodule "qibolab_platforms_qrc"]
 	path = qibolab_platforms_qrc
 	url = git@github.com:qiboteam/qibolab_platforms_qrc.git
-	branch = 0.2-qw11qD
+	branch = 0.2-qw11qD-qubits
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:alecandido/qibocal.git
-	branch = qibolab0.2
+	branch = qibolab0.2-qubits
