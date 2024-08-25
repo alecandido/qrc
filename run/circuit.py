@@ -1,7 +1,9 @@
 import qibo
 
 c = qibo.Circuit(5)
-c.add(qibo.gates.M(0))
-r = c(nshots=100)
+for n in range(c.nqubits):
+    c.add(qibo.gates.GPI2(n, phi=0.1))
+    c.add(qibo.gates.M(n))
+r = c(nshots=10)
 
-print(r)
+print(r.samples())
