@@ -13,5 +13,5 @@
 	branch = main
 [submodule "qibocal"]
 	path = qibocal
-	url = git@github.com:qiboteam/qibocal.git
+	url = git@github.com:alecandido/qibocal.git
 	branch = main
