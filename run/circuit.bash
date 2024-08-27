@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#SBATCH -J circuit
 #SBATCH -p qw5q_platinum
 #SBATCH -o var/debug.out
 

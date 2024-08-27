@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#SBATCH -J calibration-script
 #SBATCH -p qw11q
 #SBATCH -o var/debug.out
 
