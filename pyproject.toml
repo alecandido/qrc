@@ -19,6 +19,7 @@ ipython = "^8.12.0"
 qibo = { path = "qibo", develop = true }
 qibolab = { path = "qibolab", develop = true, extras = [
   "qm",
+  "qblox",
   "zh",
   "rfsoc",
   "los",
