@@ -1,5 +1,7 @@
 import qibo
 
+qibo.set_backend("qibolab", platform="iqm5q")
+
 c = qibo.Circuit(5)
 for n in range(c.nqubits):
     c.add(qibo.gates.GPI2(n, phi=0.1))
