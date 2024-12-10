@@ -34,6 +34,10 @@
 
           env = {
             QIBOLAB_PLATFORMS = config.devenv.shells.default.env.DEVENV_ROOT + "/qibolab_platforms_qrc";
+            LD_LIBRARY_PATH = builtins.concatStringsSep ":" (map (p: "${p}/lib") (with pkgs; [
+              stdenv.cc.cc.lib
+              zlib
+            ]));
           };
 
           languages.python = {
