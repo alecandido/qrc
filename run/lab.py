@@ -21,7 +21,7 @@ res = platform.execute(
     nshots=1e3,
     updates=[{"log": LogConfig(path=log).model_dump()}],
     sweepers=[
-        [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.2), pulses=[rx[0][1]])]
+        # [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.2), pulses=[rx[0][1]])]
     ],
 )
 
