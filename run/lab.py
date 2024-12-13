@@ -23,7 +23,7 @@ res = platform.execute(
     updates=[{"log": LogConfig(path=log).model_dump()}],
     averaging_mode=AveragingMode.CYCLIC,
     sweepers=[
-        [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.2), pulses=[rx[0][1]])],
+        [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.09), pulses=[rx[0][1]])],
         [
             Sweeper(
                 parameter=Parameter.relative_phase,
@@ -32,7 +32,7 @@ res = platform.execute(
             ),
             Sweeper(
                 parameter=Parameter.frequency,
-                range=(-1e8, 1e8, 1.5e7),
+                range=(-1e8, 1e8, 3.5e7),
                 channels=[rx[0][0]],
             ),
         ],
