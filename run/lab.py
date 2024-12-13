@@ -3,6 +3,7 @@ import tempfile
 
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 from qibolab._core.components.configs import LogConfig
+from qibolab._core.execution_parameters import AveragingMode
 
 platform = create_platform("iqm5q")
 
@@ -20,8 +21,21 @@ res = platform.execute(
     [sequence],
     nshots=1e3,
     updates=[{"log": LogConfig(path=log).model_dump()}],
+    averaging_mode=AveragingMode.CYCLIC,
     sweepers=[
-        # [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.2), pulses=[rx[0][1]])]
+        [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.2), pulses=[rx[0][1]])],
+        [
+            Sweeper(
+                parameter=Parameter.relative_phase,
+                range=(0, 1e9, 3e6),
+                pulses=[rx[0][1]],
+            ),
+            Sweeper(
+                parameter=Parameter.frequency,
+                range=(-1e8, 1e8, 1.5e7),
+                channels=[rx[0][0]],
+            ),
+        ],
     ],
 )
 
