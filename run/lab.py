@@ -4,7 +4,9 @@ import tempfile
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 from qibolab._core.components.configs import LogConfig
 from qibolab._core.execution_parameters import AveragingMode
+from qibolab.instruments.qblox import mock as qblox_mock
 
+qblox_mock.install()
 platform = create_platform("iqm5q")
 
 q0 = platform.natives.single_qubit[0]
@@ -17,6 +19,8 @@ sequence |= rx
 sequence |= q0.MZ()
 
 log = Path(tempfile.mkdtemp(prefix="qblox-"))
+
+platform.connect()
 res = platform.execute(
     [sequence],
     nshots=1e3,
@@ -38,6 +42,7 @@ res = platform.execute(
         ],
     ],
 )
+platform.disconnect()
 
 print(res)
 print(log)
