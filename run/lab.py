@@ -1,8 +1,10 @@
-from pathlib import Path
-import tempfile
+# from pathlib import Path
+# import tempfile
 
+import rich.console
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
-from qibolab._core.components.configs import LogConfig
+
+# from qibolab._core.components.configs import LogConfig
 from qibolab._core.execution_parameters import AveragingMode
 from qibolab.instruments.qblox import mock as qblox_mock
 
@@ -18,20 +20,20 @@ rx = q0.RX()
 sequence |= rx
 sequence |= q0.MZ()
 
-log = Path(tempfile.mkdtemp(prefix="qblox-"))
+# log = Path(tempfile.mkdtemp(prefix="qblox-"))
 
 platform.connect()
 res = platform.execute(
     [sequence],
-    nshots=1e3,
-    updates=[{"log": LogConfig(path=log).model_dump()}],
+    nshots=1e1,
+    # updates=[{"log": LogConfig(path=log).model_dump()}],
     averaging_mode=AveragingMode.CYCLIC,
     sweepers=[
         [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.09), pulses=[rx[0][1]])],
         [
             Sweeper(
                 parameter=Parameter.relative_phase,
-                range=(0, 1e9, 3e6),
+                range=(0, 1e9, 3e8),
                 pulses=[rx[0][1]],
             ),
             Sweeper(
@@ -42,7 +44,16 @@ res = platform.execute(
         ],
     ],
 )
+
+mock_cluster = platform.instruments["qblox"].cluster
 platform.disconnect()
 
+cons = rich.console.Console(color_system="truecolor")
+
+for (slot, seq), prog in mock_cluster.programs.items():
+    if prog.strip() == "":
+        continue
+    cons.print(f"[blue i]slot[/] {slot} [pink1]seq[/] {seq}")
+    cons.print(prog)
+
 print(res)
-print(log)
