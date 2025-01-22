@@ -1,6 +1,7 @@
 # from pathlib import Path
 # import tempfile
 
+import numpy as np
 import rich.console
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 
@@ -49,11 +50,20 @@ mock_cluster = platform.instruments["qblox"].cluster
 platform.disconnect()
 
 cons = rich.console.Console(color_system="truecolor")
+headers = "b i color(8)"
 
 for (slot, seq), prog in mock_cluster.programs.items():
     if prog.strip() == "":
         continue
-    cons.print(f"[blue i]slot[/] {slot} [pink1]seq[/] {seq}")
+    cons.print(f"\n[blue i]slot[/] {slot} [pink1]seq[/] {seq}")
     cons.print(prog)
+    cons.print(f"[{headers}]waveforms[/]")
+    wavs = mock_cluster.sequences[(slot, seq)]["waveforms"]
+    for id_, wav in wavs.items():
+        cons.print(id_)
+        cons.print(wav | {"data": np.round(wav["data"][:5], 5).tolist() + ["..."]})
+    cons.print(
+        f"[{headers}]acquisitions[/]\n {mock_cluster.sequences[(slot, seq)]['acquisitions']}"
+    )
 
-print(res)
+cons.print(f"\n[{headers}]results[/]", res)
