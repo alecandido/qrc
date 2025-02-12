@@ -2,12 +2,18 @@
 # import tempfile
 
 import numpy as np
+from qibolab import Delay
 import rich.console
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 
 # from qibolab._core.components.configs import LogConfig
 from qibolab._core.execution_parameters import AveragingMode
 from qibolab.instruments.qblox import mock as qblox_mock
+
+cons = rich.console.Console(color_system="truecolor")
+headers = "b i color(8)"
+
+# ----
 
 qblox_mock.install()
 platform = create_platform("iqm5q")
@@ -18,6 +24,8 @@ assert q0.MZ is not None
 
 sequence = PulseSequence()
 rx = q0.RX()
+delay = Delay(duration=10)
+sequence.append((rx[0][0], delay))
 sequence |= rx
 sequence |= q0.MZ()
 
@@ -30,11 +38,16 @@ res = platform.execute(
     # updates=[{"log": LogConfig(path=log).model_dump()}],
     averaging_mode=AveragingMode.CYCLIC,
     sweepers=[
-        [Sweeper(parameter=Parameter.amplitude, range=(0, 1, 0.09), pulses=[rx[0][1]])],
+        [
+            Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay]),
+            Sweeper(
+                parameter=Parameter.amplitude, range=(0, 1, 0.09), pulses=[rx[0][1]]
+            ),
+        ],
         [
             Sweeper(
-                parameter=Parameter.relative_phase,
-                range=(0, 1e9, 3e8),
+                parameter=Parameter.amplitude,
+                range=(0, 1, 3e-2),
                 pulses=[rx[0][1]],
             ),
             Sweeper(
@@ -49,8 +62,7 @@ res = platform.execute(
 mock_cluster = platform.instruments["qblox"].cluster
 platform.disconnect()
 
-cons = rich.console.Console(color_system="truecolor")
-headers = "b i color(8)"
+# ---
 
 for (slot, seq), prog in mock_cluster.programs.items():
     if prog.strip() == "":
