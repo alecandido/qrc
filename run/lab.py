@@ -7,7 +7,7 @@ import rich.console
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 
 # from qibolab._core.components.configs import LogConfig
-from qibolab._core.execution_parameters import AveragingMode
+from qibolab._core.execution_parameters import AcquisitionType, AveragingMode
 from qibolab.instruments.qblox import mock as qblox_mock
 
 cons = rich.console.Console(color_system="truecolor")
@@ -37,6 +37,7 @@ res = platform.execute(
     nshots=1e1,
     # updates=[{"log": LogConfig(path=log).model_dump()}],
     averaging_mode=AveragingMode.CYCLIC,
+    acquisition_type=AcquisitionType.INTEGRATION,
     sweepers=[
         [
             Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay]),
@@ -47,7 +48,7 @@ res = platform.execute(
         [
             Sweeper(
                 parameter=Parameter.amplitude,
-                range=(0, 1, 3e-2),
+                range=(1, 0, -3e-2),
                 pulses=[rx[0][1]],
             ),
             Sweeper(
