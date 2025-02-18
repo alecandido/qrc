@@ -24,10 +24,11 @@ assert q0.MZ is not None
 
 sequence = PulseSequence()
 rx = q0.RX()
+mz = q0.MZ()
 delay = Delay(duration=10)
-sequence.append((rx[0][0], delay))
+sequence.append((mz[0][0], delay))
 sequence |= rx
-sequence |= q0.MZ()
+sequence |= mz
 
 # log = Path(tempfile.mkdtemp(prefix="qblox-"))
 
@@ -39,12 +40,7 @@ res = platform.execute(
     averaging_mode=AveragingMode.CYCLIC,
     acquisition_type=AcquisitionType.INTEGRATION,
     sweepers=[
-        [
-            Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay]),
-            Sweeper(
-                parameter=Parameter.amplitude, range=(0, 1, 0.09), pulses=[rx[0][1]]
-            ),
-        ],
+        [Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay])],
         [
             Sweeper(
                 parameter=Parameter.amplitude,
@@ -53,7 +49,7 @@ res = platform.execute(
             ),
             Sweeper(
                 parameter=Parameter.frequency,
-                range=(-1e8, 1e8, 3.5e7),
+                range=(4e9, 4.4e9, 35e6),
                 channels=[rx[0][0]],
             ),
         ],
