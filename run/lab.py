@@ -1,21 +1,30 @@
-# from pathlib import Path
-# import tempfile
+"""Testing qblox driver."""
+
+from pathlib import Path
+import tempfile
 
 import numpy as np
 from qibolab import Delay
 import rich.console
 from qibolab import create_platform, PulseSequence, Parameter, Sweeper
 
-# from qibolab._core.components.configs import LogConfig
+from qibolab._core.components.configs import LogConfig
 from qibolab._core.execution_parameters import AcquisitionType, AveragingMode
 from qibolab.instruments.qblox import mock as qblox_mock
+
+mock = True
+log = False
+
+# ---
 
 cons = rich.console.Console(color_system="truecolor")
 headers = "b i color(8)"
 
-# ----
+# ---
 
-qblox_mock.install()
+if mock:
+    qblox_mock.install()
+# platform = create_platform("qblox-test")
 platform = create_platform("iqm5q")
 
 q0 = platform.natives.single_qubit[0]
@@ -30,14 +39,15 @@ sequence.append((mz[0][0], delay))
 sequence |= rx
 sequence |= mz
 
-# log = Path(tempfile.mkdtemp(prefix="qblox-"))
+logpath = Path(tempfile.mkdtemp(prefix="qblox-")) if log else Path()
+logconfig = {"log": LogConfig(path=logpath).model_dump()} if log else {}
 
 platform.connect()
 res = platform.execute(
     [sequence],
     nshots=1e1,
-    # updates=[{"log": LogConfig(path=log).model_dump()}],
-    averaging_mode=AveragingMode.CYCLIC,
+    updates=[logconfig],
+    averaging_mode=AveragingMode.SINGLESHOT,
     acquisition_type=AcquisitionType.INTEGRATION,
     sweepers=[
         [Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay])],
@@ -56,23 +66,25 @@ res = platform.execute(
     ],
 )
 
-mock_cluster = platform.instruments["qblox"].cluster
+if mock:
+    mock_cluster = platform.instruments["qblox"].cluster
 platform.disconnect()
 
 # ---
 
-for (slot, seq), prog in mock_cluster.programs.items():
-    if prog.strip() == "":
-        continue
-    cons.print(f"\n[blue i]slot[/] {slot} [pink1]seq[/] {seq}")
-    cons.print(prog)
-    cons.print(f"[{headers}]waveforms[/]")
-    wavs = mock_cluster.sequences[(slot, seq)]["waveforms"]
-    for id_, wav in wavs.items():
-        cons.print(id_)
-        cons.print(wav | {"data": np.round(wav["data"][:5], 5).tolist() + ["..."]})
-    cons.print(
-        f"[{headers}]acquisitions[/]\n {mock_cluster.sequences[(slot, seq)]['acquisitions']}"
-    )
+if mock:
+    for (slot, seq), prog in mock_cluster.programs.items():
+        if prog.strip() == "":
+            continue
+        cons.print(f"\n[blue i]slot[/] {slot} [pink1]seq[/] {seq}")
+        cons.print(prog)
+        cons.print(f"[{headers}]waveforms[/]")
+        wavs = mock_cluster.sequences[(slot, seq)]["waveforms"]
+        for id_, wav in wavs.items():
+            cons.print(id_)
+            cons.print(wav | {"data": np.round(wav["data"][:5], 5).tolist() + ["..."]})
+        cons.print(
+            f"[{headers}]acquisitions[/]\n {mock_cluster.sequences[(slot, seq)]['acquisitions']}"
+        )
 
 cons.print(f"\n[{headers}]results[/]", res)
