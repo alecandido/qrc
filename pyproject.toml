@@ -6,7 +6,7 @@ authors = ["Alessandro Candido <candido.ale@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
+python = ">=3.10,<3.13"
 fabric = "^3.2.2"
 click = { version = "^8.1.7", optional = true }
 
@@ -16,7 +16,7 @@ cli = ["click"]
 [tool.poetry.group.dev.dependencies]
 pdbpp = "^0.10.3"
 ipython = "^8.12.0"
-qibo = { path = "qibo", develop = true }
+# qibo = { path = "qibo", develop = true }
 qibolab = { path = "qibolab", develop = true, extras = [
   "qm",
   "qblox",
