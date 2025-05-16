@@ -10,7 +10,7 @@
 [submodule "qibolab_platforms_qrc"]
 	path = qibolab_platforms_qrc
 	url = git@github.com:qiboteam/qibolab_platforms_qrc.git
-	branch = qblox-test
+	branch = spinq-qblox
 [submodule "qibocal"]
 	path = qibocal
 	url = git@github.com:alecandido/qibocal.git
