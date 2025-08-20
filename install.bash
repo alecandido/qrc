@@ -2,6 +2,7 @@
 
 inst='poetry run pip install'
 
-$inst ./qibocal
-$inst ./qibolab
-$inst ./qibo
+$inst qibolab-qm qibolab-qblox
+$inst -e ./qibocal
+$inst -e ./qibolab
+$inst -e ./qibo
