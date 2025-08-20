@@ -17,9 +17,6 @@ cli = ["click"]
 [tool.poetry.group.dev.dependencies]
 pudb = "^2024.1.3"
 ipython = "^8.12.0"
-# qibo = { path = "qibo", develop = true }
-qibolab = { path = "qibolab", develop = true, extras = ["los"] }
-qibocal = { path = "qibocal", develop = true }
 
 [tool.poetry.group.test]
 optional = true
