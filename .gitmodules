@@ -6,12 +6,12 @@
 [submodule "qibolab"]
 	path = qibolab
 	url = git@github.com:qiboteam/qibolab.git
-	branch = qblox
+	branch = main
 [submodule "qibolab_platforms_qrc"]
 	path = qibolab_platforms_qrc
 	url = git@github.com:qiboteam/qibolab_platforms_qrc.git
-	branch = spinq-qblox
+	branch = main
 [submodule "qibocal"]
 	path = qibocal
-	url = git@github.com:alecandido/qibocal.git
+	url = git@github.com:qiboteam/qibocal.git
 	branch = main
