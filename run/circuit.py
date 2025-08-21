@@ -9,6 +9,6 @@ for n in [0]:
     # c.add(g.GPI2(n, phi=0.1))
     c.add(g.X(n))
     c.add(g.M(n))
-r = c(nshots=10)
+r = c(nshots=int(1e4))
 
-print(r.samples())
+print(r.samples().mean())
