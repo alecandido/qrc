@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -p iqm5q
+#SBATCH -p qw21q-d
 #SBATCH -o var/debug.out
 
 BASEDIR=$(realpath "$SLURM_SUBMIT_DIR")
