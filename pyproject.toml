@@ -10,6 +10,7 @@ python = ">=3.10,<3.13"
 fabric = "^3.2.2"
 click = { version = "^8.1.7", optional = true }
 qibolab-qblox = "^0.0.2"
+rich = "^14.2.0"
 
 [tool.poetry.extras]
 cli = ["click"]
