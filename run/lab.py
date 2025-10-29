@@ -1,16 +1,15 @@
 """Testing qblox driver."""
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import numpy as np
-from qibolab import Delay
 import rich.console
-from qibolab import create_platform, PulseSequence, Parameter, Sweeper
-
 from qibolab._core.components.configs import LogConfig
 from qibolab._core.execution_parameters import AcquisitionType, AveragingMode
 from qibolab.instruments.qblox import mock as qblox_mock
+
+from qibolab import Delay, Parameter, PulseSequence, Sweeper, create_platform
 
 mock = True
 log = False
@@ -33,10 +32,12 @@ assert q0.MZ is not None
 
 sequence = PulseSequence()
 rx = q0.RX()
+rx1 = q0.RX()
 mz = q0.MZ()
 delay = Delay(duration=10)
 sequence.append((mz[0][0], delay))
 sequence |= rx
+sequence |= rx1
 sequence |= mz
 
 logpath = Path(tempfile.mkdtemp(prefix="qblox-")) if log else Path()
@@ -47,7 +48,7 @@ res = platform.execute(
     [sequence],
     nshots=1e1,
     updates=[logconfig],
-    averaging_mode=AveragingMode.SINGLESHOT,
+    averaging_mode=AveragingMode.CYCLIC,
     acquisition_type=AcquisitionType.INTEGRATION,
     sweepers=[
         [Sweeper(parameter=Parameter.duration, range=(10, 100, 20), pulses=[delay])],
@@ -55,7 +56,7 @@ res = platform.execute(
             Sweeper(
                 parameter=Parameter.amplitude,
                 range=(1, 0, -3e-2),
-                pulses=[rx[0][1]],
+                pulses=[rx[0][1], rx1[0][1]],
             ),
             Sweeper(
                 parameter=Parameter.frequency,
