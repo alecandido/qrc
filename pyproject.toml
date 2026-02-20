@@ -7,11 +7,6 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-fabric = "^3.2.2"
-click = { version = "^8.1.7", optional = true }
-
-[tool.poetry.extras]
-cli = ["click"]
 
 [tool.poetry.group.dev.dependencies]
 pudb = "^2024.1.3"
@@ -19,13 +14,3 @@ ipython = "^8.12.0"
 
 [tool.poetry.group.test]
 optional = true
-
-[tool.poetry.group.test.dependencies]
-pytest = "^7.2.3"
-
-[tool.poetry.scripts]
-qrc = "qrc.cli:run"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
