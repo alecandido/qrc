@@ -1,9 +1,10 @@
 from collections.abc import Iterable
 from pathlib import Path
 import logging
-import shutil
 import datetime
+import shutil
 
+from qibolab import LogConfig
 import rich
 from qibocal.auto.execute import Executor
 from qibocal.cli.report import report
@@ -13,11 +14,17 @@ logging.basicConfig(level=logging.INFO)
 
 data = Path(__file__).parents[1] / "var"
 path = data / "cal"
+log = data / "log"
+shutil.rmtree(log, ignore_errors=True)
+log.mkdir()
+
 targets = [[2, 4]]
+
 
 with Executor.open(
     platform="qw5q_platinum", targets=targets, path=path, force=True
 ) as e:
+    e.platform.parameters.configs["log"] = LogConfig(path=log)
     # rs = e.resonator_spectroscopy(nshots=100, freq_width=30e6, freq_step=200e3, power_level="high", amplitude=0.2, relaxation_time=500)
     # rp = e.resonator_punchout(nshots=500, relaxation_time=20_000, freq_width=5_000_000, freq_step=100_000, min_amp=0.005, max_amp=0.6, step_amp=0.02)
     # qs = e.qubit_spectroscopy(nshots=1000, relaxation_time=1_000, freq_width=40_000_000, freq_step=100_000, drive_duration=8_000, drive_amplitude=0.02)
@@ -64,6 +71,7 @@ def save(path: Path, e: Executor):
 
     folder.mkdir(exist_ok=True, parents=True)
     path.rename(folder / exp)
+    print(f"Saved experiment to {folder / exp}")
 
 
 save(path, e)
