@@ -47,9 +47,9 @@ with Executor.open(
     # faf = e.flux_amplitude_frequency(amplitude_min=0.0, amplitude_max=0.1, amplitude_step=0.005, duration=200, relaxation_time=5000)
     # cry = e.cryoscope(duration_min=1, duration_max=80, duration_step=1, flux_pulse_amplitude=0.1, relaxation_time=5000)
     co = e.correct_virtual_z_phases(
-        theta_start=-3.14,
-        theta_end=3.14,
-        theta_step=0.1,
+        theta_start=0,
+        theta_end=-6.28,
+        theta_step=-0.1,
         nshots=200,
     )
 
