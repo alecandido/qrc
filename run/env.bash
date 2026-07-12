@@ -6,7 +6,8 @@ fi
 
 BASEDIR=$(realpath "$1")
 QIBOLAB_PLATFORMS=$(realpath "$BASEDIR/qibolab_platforms_qrc")
-PYTHONBREAKPOINT="pudb.set_trace"
+#PYTHONBREAKPOINT="pudb.set_trace"
 
+export QIBO_BACKEND="numpy"
 export QIBOLAB_PLATFORMS
 #export PYTHONBREAKPOINT
