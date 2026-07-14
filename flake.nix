@@ -2,61 +2,59 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     systems.url = "github:nix-systems/default";
-    devenv = {
-      url = "github:cachix/devenv";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    flake-parts.url = "github:hercules-ci/flake-parts";
+    devenv.url = "github:cachix/devenv";
+    nixpkgs-python.url = "github:cachix/nixpkgs-python";
   };
 
   outputs = {
     self,
     nixpkgs,
-    flake-parts,
+    devenv,
+    systems,
     ...
-  } @ inputs:
-    flake-parts.lib.mkFlake {inherit inputs;} {
-      imports = [inputs.devenv.flakeModule];
-      systems = nixpkgs.lib.systems.flakeExposed;
+  } @ inputs: let
+    forEachSystem = nixpkgs.lib.genAttrs (import systems);
+  in {
+    devShells =
+      forEachSystem
+      (system: let
+        pkgs = nixpkgs.legacyPackages.${system};
+      in {
+        default = devenv.lib.mkShell {
+          inherit inputs pkgs;
 
-      perSystem = {
-        pkgs,
-        config,
-        ...
-      }: {
-        packages.default = pkgs.poetry2nix.mkPoetryApplication {
-          projectDir = self;
-          preferWheels = true;
-        };
+          modules = [
+            ({
+              lib,
+              pkgs,
+              config,
+              ...
+            }: {
+              packages = with pkgs; [pre-commit jupyter];
 
-        devenv.shells.default = {
-          packages = with pkgs; [pre-commit poethepoet];
-
-          env = {
-            QIBOLAB_PLATFORMS = config.devenv.shells.default.env.DEVENV_ROOT + "/qibolab_platforms_qrc";
-            LD_LIBRARY_PATH = builtins.concatStringsSep ":" (map (p: "${p}/lib") (with pkgs; [
-              stdenv.cc.cc.lib
-              zlib
-            ]));
-            PYTHONBREAKPOINT = "pudb.set_trace";
-          };
-
-          languages.python = {
-            enable = true;
-            poetry = {
-              enable = true;
-              install = {
-                enable = true;
-                groups = ["dev" "test"];
+              env = {
+                QIBOLAB_PLATFORMS = (dirOf config.env.DEVENV_ROOT) + "/qibolab_platforms_qrc";
+                LD_LIBRARY_PATH = builtins.concatStringsSep ":" (map (p: "${p}/lib") (with pkgs; [
+                  stdenv.cc.cc.lib
+                  zlib
+                ]));
+                PYTHONBREAKPOINT = "pudb.set_trace";
               };
-            };
-          };
-        };
-      };
-    };
 
-  nixConfig = {
-    extra-trusted-public-keys = "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=";
-    extra-substituters = "https://devenv.cachix.org";
+              languages.python = {
+                enable = true;
+                libraries = with pkgs; [zlib];
+                poetry = {
+                  enable = true;
+                  install = {
+                    enable = true;
+                    groups = ["dev"];
+                  };
+                };
+              };
+            })
+          ];
+        };
+      });
   };
 }
