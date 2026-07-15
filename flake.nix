@@ -43,6 +43,7 @@
 
               languages.python = {
                 enable = true;
+                version = "3.13";
                 libraries = with pkgs; [zlib];
                 poetry = {
                   enable = true;

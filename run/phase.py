@@ -1,101 +1,117 @@
-from collections.abc import Iterable
-from pathlib import Path
-import logging
 import datetime
-import shutil
+import logging
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import rich
-from qibolab import AveragingMode, LogConfig, Parameter, Sweeper, VirtualZ
 from qibocal.auto.execute import Executor
+from qibocal.calibration.calibration import QubitId
+from qibolab._core.native import SingleQubitNatives
+
+from qibolab import (
+    AveragingMode,
+    LogConfig,
+    Parameter,
+    PulseSequence,
+    Qubit,
+    Sweeper,
+    VirtualZ,
+)
+
+Results = dict[QubitId, npt.NDArray[np.float64]]
+HERE = Path(__file__).parent
 
 # Configure the global logging threshold to DEBUG
 logging.basicConfig(level=logging.INFO)
 
-data = Path(__file__).parents[1] / "var"
-path = data / "cal"
-log = data / "log"
-shutil.rmtree(log, ignore_errors=True)
-log.mkdir()
-
-targets = [[2, 4]]
-results: dict[tuple[int, int], dict[int, npt.NDArray[np.float64]]] = {}
+platform = "qpu169"
+targets: list[QubitId] = [2]
 endph, nph = 12 * np.pi, 200
 phases = np.linspace(0.0, endph, nph)
+swept = True
 
 
-with Executor.open(
-    platform="qw5q_platinum", targets=targets, path=path, force=True
-) as e:
-    e.platform.parameters.configs["log"] = LogConfig(path=log)
-    for t in e.targets:
-        q0 = e.platform.qubits[t[0]]
-        q1 = e.platform.qubits[t[1]]
-        n0 = e.platform.natives.single_qubit[t[0]]
-        n1 = e.platform.natives.single_qubit[t[1]]
-        m0 = n0.MZ()
-        m1 = n1.MZ()
-        meas = {t[0]: m0[0][1].id, t[1]: m1[0][1].id}
-        # values = []
-        # for ph in phases:
-        #     seq = (
-        #         n0.R(np.pi / 2)
-        #         | [(q0.drive, VirtualZ(phase=ph))]
-        #         | n0.R(np.pi / 2)
-        #         | m0
-        #         | m1
-        #     )
-        #     res = e.platform.execute(
-        #         [seq], [], nshots=1e3, averaging_mode=AveragingMode.CYCLIC
-        #     )
-        #     values.append({k: res[v] for k, v in meas.items()})
-        # results[t] = {i: np.array([v[i] for v in values]) for i in t}
-        vz = VirtualZ(phase=0)
-        seq = n0.R(np.pi / 2) | [(q0.drive, vz)] | n0.R(np.pi / 2) | m0 | m1
-        phs = Sweeper(
-            parameter=Parameter.phase, range=(0, endph, endph / nph), pulses=[vz]
-        )
+def prepare_folder() -> Path:
+    now = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+    exp = f"{now}_[{targets}]_phase"
+
+    folder = HERE / platform / exp
+    folder.mkdir(parents=True)
+
+    return folder
+
+
+def loop(
+    e: Executor, qubit: Qubit, natives: SingleQubitNatives, mz: PulseSequence
+) -> npt.NDArray[np.float64]:
+    meas = mz[0][1].id
+    assert qubit.drive is not None
+
+    values = []
+    for ph in phases:
+        vz = VirtualZ(phase=ph)
+        seq = natives.R(np.pi / 2) | [(qubit.drive, vz)] | natives.R(np.pi / 2) | mz
         res = e.platform.execute(
-            [seq], [[phs]], nshots=1e3, averaging_mode=AveragingMode.CYCLIC
+            [seq], [], nshots=1e3, averaging_mode=AveragingMode.CYCLIC
         )
-        results[t] = {k: res[v] for k, v in meas.items()}
+        values.append(res[meas])
+    return np.array(values)
+
+
+def sweep(
+    e: Executor, qubit: Qubit, natives: SingleQubitNatives, mz: PulseSequence
+) -> npt.NDArray[np.float64]:
+    meas = mz[0][1].id
+    assert qubit.drive is not None
+
+    vz = VirtualZ(phase=0)
+    seq = natives.R(np.pi / 2) | [(qubit.drive, vz)] | natives.R(np.pi / 2) | mz
+    phs = Sweeper(parameter=Parameter.phase, range=(0, endph, endph / nph), pulses=[vz])
+    res = e.platform.execute(
+        [seq], [[phs]], nshots=1e3, averaging_mode=AveragingMode.CYCLIC
+    )
+    return res[meas]
 
 
 def plot(
     phases: npt.NDArray[np.float64],
-    results: dict[tuple[int, int], dict[int, npt.NDArray[np.float64]]],
+    results: dict[QubitId, npt.NDArray[np.float64]],
     path: Path,
 ) -> None:
     path.mkdir(exist_ok=True, parents=True)
     for t, res in results.items():
-        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(6, 4))
-        for ax, values in zip(axs, res.values()):
-            ax.scatter(phases, values)
+        fig = plt.figure(figsize=(6, 4))
+        fig.axes[0].scatter(phases, res)
         fig.savefig(path / f"oscillation-{t}.png", dpi=300)
 
 
-rich.print(results)
-plot(phases, results, e.path / "data")
+def run(report: Path, log: Path) -> Results:
+    results: Results = {}
+    with Executor.open(platform=platform, targets=targets, path=report) as e:
+        e.platform.parameters.configs["log"] = LogConfig(path=log)
+        for t in e.targets:
+            assert isinstance(t, (int, str))
+            qubit = e.platform.qubits[t]
+            natives = e.platform.natives.single_qubit[t]
+            assert natives.MZ is not None
+            mz = natives.MZ()
+            results[t] = (
+                sweep(e, qubit, natives, mz) if swept else loop(e, qubit, natives, mz)
+            )
+    return results
 
 
-def save(path: Path, e: Executor) -> None:
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    targets = ":".join(
-        [
-            "-".join(str(s) for s in t) if isinstance(t, Iterable) else str(t)
-            for t in e.targets
-        ]
-    )
-    now = datetime.datetime.now().strftime("%H:%M:%S")
-    protocols = "-".join([t.id for t in e.history])
-    exp = f"{now}_[{targets}]_{protocols}"
-    folder = data / e.platform.name / today
+def main():
+    folder = prepare_folder()
+    report = folder / "report"
+    log = folder / "log"
 
-    folder.mkdir(exist_ok=True, parents=True)
-    path.rename(folder / exp)
-    print(f"Saved experiment to {folder / exp}")
+    res = run(report, log)
+    rich.print(res)
+    plot(phases, res, report / "data")
 
 
-save(path, e)
+if __name__ == "__main__":
+    main()
