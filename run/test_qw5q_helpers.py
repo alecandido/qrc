@@ -623,9 +623,10 @@ def approve_all(plan: h.Plan) -> h.Gate:
 
 
 def test_stock_qw5q_platinum_blocks_every_qutrit_plan(monkeypatch):
+    # both from `qibolab._core`: import sorting must not depend on the empty
+    # submodule directories of this repository
     from qibolab._core.instruments.qblox.cluster import Cluster
-
-    from qibolab import Platform
+    from qibolab._core.platform.platform import Platform
 
     entries = [e for e in VERIFIED_PLATFORMS.split(os.pathsep) if e]
     stock = next(
