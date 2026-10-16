@@ -5,27 +5,38 @@ with a few display utilities (`helpers.py`). Not run on hardware yet.
 
 ## Requirements
 
-- `marimo`, `qibocal` (with `qibolab`) and `pandas`, on Python `>=3.11,<3.14`;
+- `marimo`, `pandas` and Qibocal with the protocol interface of
+  [qiboteam/qibocal#1722](https://github.com/qiboteam/qibocal/pull/1722)
+  (not merged yet, written against `ae0e797a`):
+
+  ```sh
+  pip install "qibocal @ git+https://github.com/qiboteam/qibocal.git@protodev"
+  ```
+
+- `qibolab` 0.2.18 or later: the current platform parameters need it;
 - the platform drivers: `qblox-instruments` and `lark` (Qblox cluster), `qcodes`
   and `qcodes_contrib_drivers` (TWPA pump);
-- `$QIBOLAB_PLATFORMS` pointing to `qibolab_platforms_qrc`.
+- `$QIBOLAB_PLATFORMS` pointing to `qibolab_platforms_qrc` (written against
+  `e77ac724`).
 
-Written against `qibocal` 0.2.7, `qibolab` 0.2.18 and platforms `e77ac724`.
 The submodules of this repository cannot load `qw5q_platinum` at their current
 pins (pinned `qibolab` 0.2.16 rejects the current platform parameters).
 
 ## Usage
 
 Edit the `parameters` cell (Qibocal units: Hz, ns, a.u.; fill the `None`), pick
-a routine and click **Run**. Instruments are connected only during that
-execution (`with executor:`), which disconnects at the end, also on failures.
+a routine and click **Acquire**. Instruments are connected only during the
+acquisition (`with executor:`), which disconnects at the end, also on failures.
+Fit and report follow, without hardware.
 
-- Results go to `var/qw5q/<date>_<time>/`, one folder per notebook session.
-- Updates are off by default. When enabled, they only change the in-memory
-  platform, to chain routines; the platform folder is never written, the updated
-  copy is in the output folder.
+- Each notebook session writes to `var/qw5q/<date>_<time>/`, with a
+  `<time>_<routine>/` folder per acquisition holding data and fit results (the
+  executor does not save them by itself).
+- Updates are only applied by **Update the in-memory platform**, and only change
+  the platform held by the notebook, to chain routines: the platform folder is
+  never written, the updated copy is dumped in the session folder.
 - Suggested order: `single_shot_classification` (if needed),
-  `flux_amplitude_frequency` with updates (it writes `flux_coefficients`), then
+  `flux_amplitude_frequency` and update (it writes `flux_coefficients`), then
   `t1_flux` / `t2_flux`.
 
 ## Platform status (`e77ac724`)

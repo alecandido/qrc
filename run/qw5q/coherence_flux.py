@@ -8,9 +8,15 @@ with app.setup(hide_code=True):
     from pathlib import Path
 
     import marimo as mo
-    from qibocal import Executor
+    from qibocal import Executor, protocols
 
-    from helpers import calibration_platform, show_data, show_qubits, show_reports
+    from helpers import (
+        calibration_platform,
+        save,
+        show_data,
+        show_qubits,
+        show_reports,
+    )
 
     VAR = Path(__file__).resolve().parents[2] / "var" / "qw5q"
 
@@ -20,10 +26,13 @@ def _():
     mo.md("""
     # `qw5q_platinum`: coherence vs flux and qutrit routines
 
-    Edit the parameters, pick a routine and click **Run**: instruments are only
-    connected during that execution, never on opening the notebook or editing
-    cells. Updates are off by default and only change the in-memory platform;
-    the platform folder is never written. See `README.md`.
+    Uses the `Executor` and `BoundProtocol` interface of
+    [qiboteam/qibocal#1722](https://github.com/qiboteam/qibocal/pull/1722).
+
+    Edit the parameters, pick a routine and click **Acquire**: instruments are
+    only connected during the acquisition, never on opening the notebook or
+    editing cells. Fit and report follow automatically; updates only change the
+    in-memory platform, on explicit request. See `README.md`.
     """)
     return
 
@@ -32,9 +41,7 @@ def _():
 def _():
     platform = calibration_platform("qw5q_platinum")
     path = VAR / f"{datetime.now():%Y-%m-%d_%H%M%S}"
-    executor = Executor.create(
-        platform=platform, path=path, targets=list(platform.qubits), update=True
-    )
+    executor = Executor.create(platform=platform, path=path, update=False)
     show_qubits(platform)
     return executor, path, platform
 
@@ -104,38 +111,52 @@ def _():
 @app.cell
 def _(parameters):
     routine = mo.ui.dropdown(list(parameters), value="t1_flux", label="Routine")
-    update = mo.ui.checkbox(label="Update the in-memory platform")
-    run = mo.ui.run_button(label="Run", kind="danger")
-    mo.hstack([routine, update, run], justify="start")
-    return routine, run, update
+    acquire = mo.ui.run_button(label="Acquire", kind="danger")
+    mo.hstack([routine, acquire], justify="start")
+    return acquire, routine
 
 
 @app.cell
-def _(executor, parameters, routine, run, update):
-    mo.stop(not run.value, mo.md("Click **Run** to execute the selected routine."))
+def _(acquire, executor, parameters, path, routine):
+    mo.stop(not acquire.value, mo.md("Click **Acquire** to run the selected routine."))
     kwargs = dict(parameters[routine.value])
     targets = kwargs.pop("targets")
     missing = [k for k, v in kwargs.items() if v is None]
     mo.stop(bool(missing), mo.callout(f"Fill in {missing}", kind="warn"))
 
+    bound = getattr(protocols, routine.value)(**kwargs)
     with executor:
-        completed = getattr(executor, routine.value)(
-            targets=targets, update=update.value, **kwargs
-        )
-    return completed, targets
+        acquired = executor.acquire(bound, targets=targets)
+    acquired = save(acquired, path / f"{datetime.now():%H%M%S}_{routine.value}")
+    show_data(acquired.data)
+    return (acquired,)
 
 
 @app.cell
-def _(completed, path, platform, targets):
-    mo.vstack(
-        [
-            mo.md(f"Output: `{path}`"),
-            show_data(completed.data),
-            completed.results,
-            show_reports(completed, targets),
-            show_qubits(platform),
-        ]
-    )
+def _(acquired, executor):
+    fitted = save(executor.fit(acquired), acquired.path)
+    fitted.results
+    return (fitted,)
+
+
+@app.cell
+def _(executor, fitted):
+    show_reports(executor.report(fitted).reports)
+    return
+
+
+@app.cell
+def _():
+    apply = mo.ui.run_button(label="Update the in-memory platform")
+    apply
+    return (apply,)
+
+
+@app.cell
+def _(apply, executor, fitted, platform):
+    mo.stop(not apply.value)
+    executor.update(fitted)
+    show_qubits(platform)
     return
 
 

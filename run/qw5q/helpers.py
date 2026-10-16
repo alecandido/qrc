@@ -1,10 +1,10 @@
 import signal
+from dataclasses import replace
 
 import marimo as mo
 import numpy as np
 import pandas as pd
 from qibocal import create_calibration_platform
-from qibocal.protocols import PROTOCOLS
 
 
 def calibration_platform(name: str):
@@ -20,12 +20,20 @@ def calibration_platform(name: str):
     return platform
 
 
+def save(completed, path):
+    """Dump data and results, which the executor does not persist."""
+    path.mkdir(parents=True, exist_ok=True)
+    completed = replace(completed, path=path)
+    completed.dump_data()
+    completed.dump_results()
+    return completed
+
+
 def show_qubits(platform):
     """Calibration relevant for flux and qutrit routines."""
     rows = []
     for q, qubit in platform.qubits.items():
         cal = platform.calibration.single_qubits[q].qubit
-        natives = platform.natives.single_qubit[q]
         flux = platform.parameters.configs.get(qubit.flux)
         rows.append(
             {
@@ -35,7 +43,7 @@ def show_qubits(platform):
                 "flux_coefficients": cal.flux_coefficients,
                 "frequency_12": cal.frequency_12,
                 "drive12": qubit.drive_extra.get((1, 2)),
-                "RX12": natives.RX12 is not None,
+                "RX12": platform.natives.single_qubit[q].RX12 is not None,
             }
         )
     return mo.ui.table(pd.DataFrame(rows), selection=None)
@@ -54,15 +62,9 @@ def show_data(data):
     return mo.accordion(tables)
 
 
-def show_reports(completed, targets):
+def show_reports(reports):
     outputs = {}
-    protocol = PROTOCOLS[completed.task.action.operation]
-    for target in targets:
-        try:
-            figures, table = protocol.report(completed.data, target, completed.results)
-        except Exception as exc:  # noqa: BLE001
-            outputs[f"Target {target}"] = mo.md(f"Report failed: `{exc!r}`")
-            continue
+    for target, (figures, table) in reports.items():
         plots = [mo.ui.plotly(figure) for figure in figures]
         if table:
             plots.append(mo.Html(table))
