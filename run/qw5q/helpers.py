@@ -1,4 +1,4 @@
-"""Support code for the ``qw5q_coherence_flux.py`` Marimo notebook.
+"""Support code for the ``coherence_flux.py`` Marimo notebook.
 
 Everything here is offline: environment checks, platform loading, preflight,
 plan validation and plotting never connect to instruments.
@@ -23,7 +23,6 @@ import pkgutil
 import platform as pyplatform
 import re
 import signal
-import subprocess
 import sys
 import threading
 import traceback
@@ -37,39 +36,13 @@ from typing import Any
 import numpy as np
 
 PLATFORM = os.environ.get("QW5Q_PLATFORM", "qw5q_platinum")
-"""Target platform name.
-
-The ``QW5Q_PLATFORM`` override only exists for offline tests (``mock``).
-"""
+"""Target platform name, overridable through ``$QW5Q_PLATFORM``."""
 
 SUPPORTED_PYTHON = ((3, 11), (3, 14))
-"""Interval ``[min, max)`` required by Qibocal and Qibolab ``main``."""
+"""Interval ``[min, max)`` required by Qibocal and Qibolab."""
 
-TESTED_PYTHON = "3.13.15"
-"""The only Python version the notebook was tested with."""
-
-CONSTRAINTS = Path(__file__).with_name("qw5q_constraints.txt")
-"""Exact package versions of the tested environment."""
-
-
-@dataclass(frozen=True)
-class Expected:
-    module: str | None
-    version: str | None
-    commit: str | None
-
-
-EXPECTED = {
-    "qibocal": Expected("qibocal", "0.2.7", "539a32f86ef40b8b3f14858623f973ddf2751d2c"),
-    "qibolab": Expected(
-        "qibolab", "0.2.18", "004c14b4f622448f593476a9e0a80714954ceed6"
-    ),
-    "qibolab_platforms_qrc": Expected(
-        None, None, "e77ac724ccac2c3d98baf2e310ff6794a8823646"
-    ),
-    "qibo": Expected("qibo", "0.3.6", None),
-}
-"""Verified upstream revisions, cf. ``run/qw5q_calibration.md``."""
+TESTED = {"qibocal": "0.2.7", "qibolab": "0.2.18"}
+"""Versions the notebook was written against: older ones are flagged."""
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 
@@ -112,88 +85,20 @@ UNSUPPORTED = (
 class Component:
     name: str
     version: str | None = None
-    commit: str | None = None
     location: str | None = None
     error: str | None = None
-    problem: str | None = None
-    """Difference from the tested environment, e.g. local modifications."""
-    expected_version: str | None = None
-    expected_commit: str | None = None
-
-    @property
-    def verified(self) -> bool:
-        return (
-            self.error is None
-            and self.problem is None
-            and self.expected_version in (None, self.version)
-            and self.expected_commit in (None, self.commit)
-        )
+    """Blocking: the notebook cannot work."""
+    warning: str | None = None
 
     @property
     def status(self) -> str:
         if self.error is not None:
             return FAIL
-        return OK if self.verified else WARN
+        return WARN if self.warning is not None else OK
 
 
-def _git(root: Path, *args: str) -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout
-
-
-def git_state(root: Path) -> tuple[str | None, str | None]:
-    """Commit checked out in ``root``, and a description of local changes.
-
-    Only the root of a Git checkout is considered. Modified, staged and untracked
-    (non ignored) files all count as local changes.
-    """
-    if not (root / ".git").exists():
-        return None, "not a Git checkout"
-    head = _git(root, "rev-parse", "HEAD")
-    status = _git(root, "status", "--porcelain", "--untracked-files=normal")
-    if head is None or status is None:
-        return None, "cannot inspect the Git checkout"
-    changes = [line for line in status.splitlines() if line.strip()]
-    dirty = (
-        f"{len(changes)} locally modified or untracked path(s), e.g. `{changes[0][3:]}`"
-        if changes
-        else None
-    )
-    return head.strip(), dirty
-
-
-def _canonical(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def package_mismatches(constraints: Path = CONSTRAINTS) -> list[str]:
-    """Installed distributions differing from the pinned versions."""
-    from importlib import metadata
-
-    installed = {}
-    for dist in metadata.distributions():
-        name = dist.metadata["Name"]
-        if name:
-            installed[_canonical(name)] = dist.version
-    mismatches = []
-    for line in constraints.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        name, _, version = line.partition("==")
-        found = installed.get(_canonical(name))
-        if found != version:
-            mismatches.append(f"{name} {found or 'missing'} (pinned {version})")
-    return mismatches
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(m) for m in re.findall(r"\d+", text)[:3])
 
 
 def platforms_dir(name: str | None = None) -> Path | None:
@@ -206,120 +111,65 @@ def platforms_dir(name: str | None = None) -> Path | None:
 
 
 def check_environment(name: str | None = None) -> list[Component]:
-    """Compare the running environment with the tested one."""
+    """Report the versions in use, and what prevents the notebook from working."""
     name = PLATFORM if name is None else name
-    setup = "Set up the environment with `run/qw5q_env.bash`."
     components = []
 
     python = pyplatform.python_version()
     low, high = SUPPORTED_PYTHON
-    supported = low <= tuple(map(int, python.split(".")[:2])) < high
     components.append(
         Component(
             "python",
             version=python,
             location=sys.executable,
             error=None
-            if supported
+            if low <= _version(python)[:2] < high
             else f"Python >={'.'.join(map(str, low))},<{'.'.join(map(str, high))} "
-            f"required. {setup}",
-            problem=None
-            if python == TESTED_PYTHON
-            else f"supported, but only Python {TESTED_PYTHON} was tested",
+            "required",
         )
     )
 
-    for key in ("qibocal", "qibolab"):
-        exp = EXPECTED[key]
-        assert exp.module is not None
+    for module_name in ("qibocal", "qibolab", "qibo", "marimo"):
         try:
-            module = importlib.import_module(exp.module)
+            module = importlib.import_module(module_name)
+            if getattr(module, "__file__", None) is None:
+                raise ImportError(
+                    "empty namespace package, e.g. an uninitialised submodule "
+                    "directory on `sys.path`"
+                )
         except Exception as exc:  # noqa: BLE001
             components.append(
-                Component(
-                    key,
-                    error=f"cannot import `{exp.module}` ({exc}). {setup}",
-                    expected_version=exp.version,
-                    expected_commit=exp.commit,
-                )
+                Component(module_name, error=f"cannot import `{module_name}` ({exc})")
             )
             continue
-        if getattr(module, "__file__", None) is None:
-            components.append(
-                Component(
-                    key,
-                    error=f"`{exp.module}` is an empty namespace package (e.g. the "
-                    f"uninitialised submodule directory on `sys.path`). {setup}",
-                    expected_version=exp.version,
-                    expected_commit=exp.commit,
-                )
-            )
-            continue
-        # editable installs from a `src/` layout checkout
-        root = Path(module.__file__).resolve().parents[2]
-        head, dirty = git_state(root)
+        version = getattr(module, "__version__", None)
+        tested = TESTED.get(module_name)
         components.append(
             Component(
-                key,
-                version=getattr(module, "__version__", None),
-                commit=head,
-                location=str(root),
-                problem=dirty,
-                expected_version=exp.version,
-                expected_commit=exp.commit,
-            )
-        )
-
-    exp = EXPECTED["qibo"]
-    try:
-        qibo = importlib.import_module("qibo")
-        components.append(
-            Component("qibo", version=qibo.__version__, expected_version=exp.version)
-        )
-    except Exception as exc:  # noqa: BLE001
-        components.append(
-            Component(
-                "qibo",
-                error=f"cannot import `qibo` ({exc})",
-                expected_version=exp.version,
-            )
-        )
-
-    if CONSTRAINTS.is_file():
-        mismatches = package_mismatches()
-        components.append(
-            Component(
-                "packages",
-                location=str(CONSTRAINTS),
-                problem=f"{len(mismatches)} differ from the pins: "
-                + ", ".join(mismatches[:5])
-                if mismatches
+                module_name,
+                version=version,
+                location=str(Path(module.__file__).parent),
+                warning=f"older than the {tested} the notebook was written against"
+                if tested and version and _version(version) < _version(tested)
                 else None,
             )
         )
-    else:
-        components.append(Component("packages", error=f"missing {CONSTRAINTS.name}"))
 
-    exp = EXPECTED["qibolab_platforms_qrc"]
     folder = platforms_dir(name)
-    head, dirty = (None, None) if folder is None else git_state(folder)
     components.append(
         Component(
-            "qibolab_platforms_qrc",
-            commit=head,
-            location=None if folder is None else str(folder),
+            "platforms",
+            location=None if folder is None else str(folder / name),
             error=None
             if folder is not None
-            else f"`$QIBOLAB_PLATFORMS` has no `{name}` folder. {setup}",
-            problem=dirty,
-            expected_commit=exp.commit if name == "qw5q_platinum" else None,
+            else f"`$QIBOLAB_PLATFORMS` has no `{name}` folder",
         )
     )
     return components
 
 
-def environment_verified(components: Iterable[Component]) -> bool:
-    return all(c.verified for c in components)
+def environment_ok(components: Iterable[Component]) -> bool:
+    return not any(c.error for c in components)
 
 
 def environment_rows(components: Iterable[Component]) -> list[dict[str, str]]:
@@ -328,10 +178,7 @@ def environment_rows(components: Iterable[Component]) -> list[dict[str, str]]:
             "component": c.name,
             "status": c.status,
             "version": c.version or "",
-            "expected version": c.expected_version or "",
-            "commit": (c.commit or "")[:12],
-            "expected commit": (c.expected_commit or "")[:12],
-            "detail": c.error or c.problem or c.location or "",
+            "detail": c.error or c.warning or c.location or "",
         }
         for c in components
     ]
@@ -1484,7 +1331,6 @@ class Gate:
     overshoot_accepted: bool = False
     confirmation: str = ""
     warnings_reviewed: bool = False
-    allow_unverified_environment: bool = False
 
 
 def blocking_reasons(plan: Plan | None, gate: Gate, environment_ok: bool) -> list[str]:
@@ -1503,8 +1349,8 @@ def blocking_reasons(plan: Plan | None, gate: Gate, environment_ok: bool) -> lis
         reasons.append("the plan warnings are not acknowledged")
     if plan.overshoot and not gate.overshoot_accepted:
         reasons.append("amplitudes beyond the declared bounds are not accepted")
-    if not environment_ok and not gate.allow_unverified_environment:
-        reasons.append("the environment differs from the verified revisions")
+    if not environment_ok:
+        reasons.append("the environment has errors (see the environment table)")
     return reasons
 
 

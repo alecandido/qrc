@@ -18,7 +18,7 @@ def _():
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
 
-    import qw5q_helpers as h
+    import helpers as h
 
     return h, here, mo
 
@@ -44,7 +44,7 @@ def _(h, mo):
         an output `new_platform/` folder is a manual step.
         Every run gets a fresh folder under `var/qw5q/`, nothing is overwritten,
         and the platform is disconnected at the end of each run.
-        See `run/qw5q_calibration.md`.
+        See `README.md`, next to this notebook.
         """
     )
     return
@@ -60,20 +60,18 @@ def _(mo):
 @app.cell
 def _(h, mo):
     components = h.check_environment()
-    environment_ok = h.environment_verified(components)
+    environment_ok = h.environment_ok(components)
     mo.vstack(
         [
             mo.md("## 1. Environment"),
             mo.callout(
                 mo.md(
-                    "Matches the tested environment: Python version, every package "
-                    "pin, and clean source checkouts at the verified commits."
+                    "Requirements found; warnings, if any, are informative."
                     if environment_ok
-                    else "**The environment differs from the tested one** (see the "
-                    "table). Use `run/qw5q_env.bash`, or explicitly allow it when "
-                    "running."
+                    else "**Missing requirements** (see the table): install `marimo`, "
+                    "`qibocal` and the platform drivers, and set `$QIBOLAB_PLATFORMS`."
                 ),
-                kind="success" if environment_ok else "warn",
+                kind="success" if environment_ok else "danger",
             ),
             mo.ui.table(h.environment_rows(components), selection=None),
         ]
@@ -108,7 +106,7 @@ def _(h, mo):
 
 @app.cell
 def _(h, here, platform):
-    session = h.HardwareSession(platform, output_root=here.parent / "var" / "qw5q")
+    session = h.HardwareSession(platform, output_root=here.parents[1] / "var" / "qw5q")
     return (session,)
 
 
@@ -284,9 +282,6 @@ def _(mo, plan):
     confirmation = mo.ui.text(
         placeholder="confirmation code", label="Type the confirmation code"
     )
-    allow_unverified = mo.ui.checkbox(
-        label="Run despite an environment differing from the verified revisions"
-    )
     write_report = mo.ui.checkbox(value=True, label="Write the Qibocal HTML report")
     mo.vstack(
         [
@@ -295,12 +290,10 @@ def _(mo, plan):
             warnings_reviewed,
             overshoot_accepted,
             confirmation,
-            allow_unverified,
             write_report,
         ]
     )
     return (
-        allow_unverified,
         confirmation,
         overshoot_accepted,
         ranges_confirmed,
@@ -323,7 +316,6 @@ def _(mo):
 
 @app.cell
 def _(
-    allow_unverified,
     components,
     confirmation,
     environment_ok,
@@ -346,7 +338,6 @@ def _(
         confirmation=confirmation.value,
         warnings_reviewed=warnings_reviewed.value,
         overshoot_accepted=overshoot_accepted.value,
-        allow_unverified_environment=allow_unverified.value,
     )
     _reasons = h.blocking_reasons(plan, _gate, environment_ok)
     _seen = len(session.records)
