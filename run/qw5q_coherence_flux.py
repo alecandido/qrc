@@ -241,6 +241,15 @@ def _(checks, h, mo, plan_form, routine_picker, session):
                     title="Warnings: acknowledge before running",
                 )
             )
+        if plan.overshoot:
+            _items.append(
+                mo.callout(
+                    mo.md("\n".join(f"- {o}" for o in plan.overshoot)),
+                    kind="danger",
+                    title="Amplitudes beyond the declared bounds: blocked unless "
+                    "explicitly accepted (or adjust the bounds)",
+                )
+            )
         if plan.ok:
             _items.append(mo.md(f"Confirmation code: **`{plan.fingerprint}`**"))
         _out = mo.vstack(_items)
@@ -256,6 +265,14 @@ def _(mo, plan):
         label="I confirm the previewed scan ranges and amplitudes are safe for this device"
     )
     warnings_reviewed = mo.ui.checkbox(label="I reviewed the plan warnings")
+    overshoot_accepted = mo.ui.checkbox(
+        label=(
+            "I accept playing the amplitudes beyond the declared bounds listed above"
+            if plan is not None and plan.overshoot
+            else "No amplitude beyond the declared bounds"
+        ),
+        disabled=plan is None or not plan.overshoot,
+    )
     confirmation = mo.ui.text(
         placeholder="confirmation code", label="Type the confirmation code"
     )
@@ -268,6 +285,7 @@ def _(mo, plan):
             mo.md("## 5. Confirmation"),
             ranges_confirmed,
             warnings_reviewed,
+            overshoot_accepted,
             confirmation,
             allow_unverified,
             write_report,
@@ -276,6 +294,7 @@ def _(mo, plan):
     return (
         allow_unverified,
         confirmation,
+        overshoot_accepted,
         ranges_confirmed,
         warnings_reviewed,
         write_report,
@@ -302,6 +321,7 @@ def _(
     h,
     hardware_consent,
     mo,
+    overshoot_accepted,
     plan,
     ranges_confirmed,
     run_button,
@@ -316,17 +336,23 @@ def _(
         ranges_confirmed=ranges_confirmed.value,
         confirmation=confirmation.value,
         warnings_reviewed=warnings_reviewed.value,
+        overshoot_accepted=overshoot_accepted.value,
         allow_unverified_environment=allow_unverified.value,
     )
     _reasons = h.blocking_reasons(plan, _gate, environment_ok)
-    _record = session.trigger(
-        run_button.value, plan, _gate, environment_ok, report=write_report.value
-    )
-    if _record is not None:
-        set_run_count(len(session.records))
-        if _record.status != "blocked":
-            # rebuild preflight and plan from the in-memory platform
-            set_platform_version(len(session.records))
+    _seen = len(session.records)
+    _record = None
+    try:
+        _record = session.trigger(
+            run_button.value, plan, _gate, environment_ok, report=write_report.value
+        )
+    finally:
+        # also after interruptions, which are recorded before re-raising
+        if len(session.records) > _seen:
+            set_run_count(len(session.records))
+            if session.records[-1].status != "blocked":
+                # rebuild preflight and plan from the in-memory platform
+                set_platform_version(len(session.records))
 
     if _record is not None and _record.status == "blocked":
         _status = mo.callout(

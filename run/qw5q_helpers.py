@@ -18,10 +18,14 @@ import importlib
 import json
 import math
 import os
+import pkgutil
 import platform as pyplatform
+import signal
 import subprocess
+import threading
 import traceback
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,8 +68,15 @@ UNSUPPORTED = (
         "`t1_flux` and `t2_flux` only address the 0-1 transition."
     ),
     (
-        "No EF T1/T2/Ramsey routines are registered either: only `qubit_spectroscopy_ef` "
-        "and `rabi_amplitude_ef` act on the 1-2 transition."
+        "No registered routine measures EF T1, T2 or Ramsey either: `t1`, `t2`, "
+        "`ramsey`, `spin_echo`, `cpmg`, `zeno` and their `_signal`/`_flux` variants "
+        "only address the 0-1 transition."
+    ),
+    (
+        "Registered routines driving the 1-2 transition: `qubit_spectroscopy_ef`, "
+        "`rabi_amplitude_ef` and `two_levels_crossing` (not exposed here), while "
+        "`dispersive_shift_qutrit` and `qutrit_classification` prepare state 2 "
+        "with RX12."
     ),
     (
         "`rabi_amplitude_ef` without a calibrated RX12 bootstraps a rectangular pulse "
@@ -223,12 +234,69 @@ def environment_rows(components: Iterable[Component]) -> list[dict[str, str]]:
     ]
 
 
+@contextmanager
+def _host_signal_handlers():
+    """Keep the SIGINT and SIGTERM handlers of the host process.
+
+    Qibolab platforms replace them on creation, with a handler raising
+    ``RuntimeError``, which prevents interrupting or shutting down the marimo
+    kernel. Disconnection on termination is restored during runs, cf.
+    :func:`_disconnect_on_sigterm`.
+    """
+    main = threading.current_thread() is threading.main_thread()
+    signals = (signal.SIGINT, signal.SIGTERM)
+    saved = {s: signal.getsignal(s) for s in signals} if main else {}
+    try:
+        yield
+    finally:
+        for s, handler in saved.items():
+            if handler is not None:
+                signal.signal(s, handler)
+
+
+@contextmanager
+def _disconnect_on_sigterm(platform):
+    """On SIGTERM, disconnect before delegating to the host handler."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+    restore = signal.SIG_DFL if previous is None else previous
+
+    def handler(signum, frame):
+        _ensure_disconnected(platform)
+        signal.signal(signum, restore)
+        if callable(restore):
+            restore(signum, frame)
+        else:
+            signal.raise_signal(signum)
+
+    signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, restore)
+
+
+@contextmanager
+def _working_directory(path: Path):
+    """Run in ``path``: some Qibocal fits write relative paths (e.g. the
+    ``qubit<N>/`` hyperparameters of ``single_shot_classification``)."""
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
 def load_platform(name: str | None = None):
     """Load the calibration platform, without connecting to instruments."""
     name = PLATFORM if name is None else name
     from qibocal.calibration import create_calibration_platform
 
-    platform = create_calibration_platform(name)
+    with _host_signal_handlers():
+        platform = create_calibration_platform(name)
     if platform.is_connected:
         raise RuntimeError(f"platform {name} unexpectedly connected while loading")
     return platform
@@ -396,7 +464,9 @@ def _qubit_checks(platform, q) -> dict[str, Check]:
     f1 = cal.readout.qudits_frequency.get(1) if cal is not None else None
     if f1 is None:
         checks["readout_state1"] = Check(
-            WARN, "missing: routines fall back to the dressed resonator frequency"
+            WARN,
+            "missing (written by dispersive_shift): routines fall back to the "
+            "dressed resonator frequency",
         )
     else:
         checks["readout_state1"] = Check(OK, _fmt_hz(f1))
@@ -471,9 +541,21 @@ _CLASSIFIERS = ScanField(
     "",
     "list",
     False,
-    default="naive_bayes",
-    help="comma separated (naive_bayes, nn, random_forest, decision_tree)",
+    help="comma separated; blank: Qibocal default (qubit_fit)",
 )
+
+
+def available_classifiers() -> list[str]:
+    """Classifier modules shipped by the installed Qibocal."""
+    try:
+        import qibocal.fitting.classifier as package
+    except ImportError:
+        return []
+    return sorted(
+        m.name
+        for m in pkgutil.iter_modules(package.__path__)
+        if m.name.endswith("_fit")
+    )
 
 
 def _amplitude_fields(prefix: str, label: str, inclusive: bool) -> tuple:
@@ -651,9 +733,12 @@ ROUTINES = {
             "qutrit_classification",
             "qutrit",
             "Qutrit (0/1/2) classification",
-            (_CLASSIFIERS,),
+            (),
             ("drive_rx", "readout_mz", "drive12_channel", "rx12"),
-            notes=("Needs a calibrated RX12; no update function.",),
+            notes=(
+                "Needs a calibrated RX12; no update function.",
+                "Only acquires and plots the 0/1/2 IQ clouds: no classifier is trained.",
+            ),
         ),
     ]
 }
@@ -720,6 +805,8 @@ class Plan:
     raw: tuple[tuple[str, Any], ...]
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    overshoot: tuple[str, ...] = ()
+    """Amplitudes played beyond the declared bounds: blocking unless accepted."""
     preview: tuple[tuple[str, str], ...] = ()
 
     @property
@@ -771,9 +858,71 @@ def _describe(values, unit: str, scale: float = 1.0, digits: int = 6) -> str:
 class _Review:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    overshoot: list[str] = field(default_factory=list)
     preview: list[tuple[str, str]] = field(default_factory=list)
     points: int = 0
     sequences: int = 1
+
+
+def _exact(values) -> str:
+    values = [repr(float(v)) for v in values]
+    if len(values) > 12:
+        values = [*values[:5], "...", *values[-5:]]
+    return "[" + ", ".join(values) + "]"
+
+
+def qibocal_range(start: float, bound: float, step: float, inclusive: bool):
+    """Values swept by Qibocal, for an inclusive or exclusive ``bound``."""
+    return np.arange(start, bound + step if inclusive else bound, step)
+
+
+def _beyond(values, bound: float, step: float, inclusive: bool):
+    """Values outside the declared bound, beyond floating point noise."""
+    tol = 1e-9 * step
+    return values[values > bound + tol] if inclusive else values[values >= bound - tol]
+
+
+def _suggest_bound(start: float, step: float, intended: float, inclusive: bool):
+    """A bound making Qibocal's range end exactly at ``intended``, if any."""
+    candidates = (
+        [np.nextafter(intended, -np.inf), intended - 1e-10 * step]
+        if inclusive
+        else [intended + step / 2]
+    )
+    for bound in candidates:
+        values = qibocal_range(start, bound, step, inclusive)
+        if (
+            values.size
+            and math.isclose(values[-1], intended, rel_tol=0, abs_tol=1e-9 * step)
+            and not _beyond(values, bound, step, inclusive).size
+        ):
+            return float(bound)
+    return None
+
+
+def _amplitude_sweep(review, label, params, keys, inclusive: bool):
+    """Preview an amplitude sweep exactly, and flag points beyond its bound."""
+    lo, hi, step = (params[k] for k in keys)
+    values = qibocal_range(lo, hi, step, inclusive)
+    end = "included" if inclusive else "excluded"
+    review.preview += [
+        (f"{label} ({keys[1]} {end})", _describe(values, "a.u.")),
+        (f"{label}, exact values", _exact(values)),
+        ("Largest |amplitude| played", f"{float(np.max(np.abs(values)))!r} a.u."),
+    ]
+    beyond = _beyond(values, hi, step, inclusive)
+    if beyond.size:
+        within = values[: values.size - beyond.size]
+        hint = ""
+        if within.size:
+            bound = _suggest_bound(lo, step, float(within[-1]), inclusive)
+            if bound is not None:
+                hint = f"; {keys[1]}={bound!r} ends at {float(within[-1])!r}"
+        review.overshoot.append(
+            f"{label}: Qibocal plays {_exact(beyond)} beyond {keys[1]}={hi!r} "
+            f"({end}), due to floating point range end points{hint}"
+        )
+    return values
 
 
 def _review_coherence_flux(platform, params, proto, targets, checks, review):
@@ -786,18 +935,12 @@ def _review_coherence_flux(platform, params, proto, targets, checks, review):
     if review.errors:
         return
     delays, amps = proto.delay_range, proto.flux_range
-    review.preview += [
-        ("Delays (end excluded)", _describe(delays, "ns")),
-        ("Flux amplitudes (end included)", _describe(amps, "a.u.")),
-        ("Largest |flux amplitude| played", f"{np.max(np.abs(amps)):.6g} a.u."),
-    ]
-    overshoot = amps[-1] - params["amplitude_max"]
-    if overshoot > 1e-12 * max(1.0, abs(params["amplitude_max"])):
-        review.warnings.append(
-            f"Qibocal's inclusive range ends at {amps[-1]!r} > amplitude_max "
-            f"{params['amplitude_max']!r} (floating point end point): adjust "
-            "amplitude_max if this amplitude must not be played"
-        )
+    review.preview.append(("Delays (end excluded)", _describe(delays, "ns")))
+    keys = ("amplitude_min", "amplitude_max", "amplitude_step")
+    swept = _amplitude_sweep(review, "Flux amplitudes", params, keys, inclusive=True)
+    if not np.array_equal(swept, amps):
+        review.errors.append("previewed amplitudes differ from Qibocal's flux_range")
+        return
     for q in targets:
         coeffs = platform.calibration.single_qubits[q].qubit.flux_coefficients
         if coeffs is None or checks[q]["flux_coefficients"].status == FAIL:
@@ -851,15 +994,12 @@ def _review_flux_amplitude(platform, params, proto, targets, checks, review):
                 )
     if review.errors:
         return
-    amps = np.arange(
-        params["amplitude_min"], params["amplitude_max"], params["amplitude_step"]
-    )
     line = f"crosstalk qubit q{crosstalk}" if crosstalk is not None else "target qubits"
-    review.preview += [
-        (f"Flux amplitudes on {line} (end excluded)", _describe(amps, "a.u.")),
-        ("Largest |flux amplitude| played", f"{np.max(np.abs(amps)):.6g} a.u."),
-        ("Flux pulse duration", f"{params['duration']:g} ns"),
-    ]
+    keys = ("amplitude_min", "amplitude_max", "amplitude_step")
+    amps = _amplitude_sweep(
+        review, f"Flux amplitudes on {line}", params, keys, inclusive=False
+    )
+    review.preview.append(("Flux pulse duration", f"{params['duration']:g} ns"))
     review.points, review.sequences = amps.size, 2
 
 
@@ -912,11 +1052,8 @@ def _review_rabi_ef(platform, params, proto, targets, checks, review):
             review.preview.append((f"q{q} pulse", f"RX12 shape, duration {duration}"))
     if review.errors:
         return
-    amps = np.arange(params["min_amp"], params["max_amp"], params["step_amp"])
-    review.preview += [
-        ("Amplitudes (end excluded)", _describe(amps, "a.u.")),
-        ("Largest |amplitude| played", f"{np.max(np.abs(amps)):.6g} a.u."),
-    ]
+    keys = ("min_amp", "max_amp", "step_amp")
+    amps = _amplitude_sweep(review, "RX12 amplitudes", params, keys, inclusive=False)
     review.points = amps.size
 
 
@@ -1009,7 +1146,13 @@ def build_plan(
             elif check.status == WARN:
                 warnings.append(f"q{q} {PREFLIGHT[name]}: {check.detail}")
 
+    if "classifiers_list" in params:
+        available = available_classifiers()
+        unknown = sorted(set(params["classifiers_list"]) - set(available))
+        if unknown:
+            errors.append(f"unknown classifiers {unknown}, available: {available}")
     review = _Review()
+    overshoot: list[str] = []
     preview: list[tuple[str, str]] = [
         ("Platform", platform.name),
         ("Routine", f"{routine} ({spec.title})"),
@@ -1024,6 +1167,7 @@ def build_plan(
             _REVIEWS[routine](platform, params, proto, known, checks, review)
             errors += review.errors
             warnings += review.warnings
+            overshoot = review.overshoot
             preview += review.preview
 
     preview += [
@@ -1069,6 +1213,7 @@ def build_plan(
         raw=tuple(sorted((k, v) for k, v in raw.items())),
         errors=tuple(errors),
         warnings=tuple(warnings),
+        overshoot=tuple(overshoot),
         preview=tuple(preview),
     )
 
@@ -1083,6 +1228,7 @@ class Gate:
 
     hardware_consent: bool = False
     ranges_confirmed: bool = False
+    overshoot_accepted: bool = False
     confirmation: str = ""
     warnings_reviewed: bool = False
     allow_unverified_environment: bool = False
@@ -1102,6 +1248,8 @@ def blocking_reasons(plan: Plan | None, gate: Gate, environment_ok: bool) -> lis
         reasons.append("the confirmation code does not match the current plan")
     if plan.warnings and not gate.warnings_reviewed:
         reasons.append("the plan warnings are not acknowledged")
+    if plan.overshoot and not gate.overshoot_accepted:
+        reasons.append("amplitudes beyond the declared bounds are not accepted")
     if not environment_ok and not gate.allow_unverified_environment:
         reasons.append("the environment differs from the verified revisions")
     return reasons
@@ -1112,7 +1260,7 @@ class RunRecord:
     plan: Plan
     nonce: int
     status: str
-    """One of ``blocked``, ``completed``, ``failed``."""
+    """One of ``blocked``, ``completed``, ``failed``, ``interrupted``."""
     reasons: list[str] = field(default_factory=list)
     path: Path | None = None
     data: Any = None
@@ -1259,31 +1407,39 @@ class HardwareSession:
             )
             if current.fingerprint != plan.fingerprint or current.errors:
                 reasons.append("the platform changed since the plan was built: rebuild")
-            elif current.warnings != plan.warnings:
+            elif (current.warnings, current.overshoot) != (
+                plan.warnings,
+                plan.overshoot,
+            ):
                 reasons.append("the plan warnings changed: rebuild and review")
-        if reasons:
-            record = RunRecord(plan, int(nonce), "blocked", reasons=reasons)
-        else:
-            record = self._execute(plan, int(nonce), report)
+        record = RunRecord(plan, int(nonce), "blocked", reasons=reasons)
+        # recorded before executing, to survive interruptions
         self.records.append(record)
+        if not reasons:
+            record.status = "failed"
+            self._execute(record, report)
         return record
 
-    def _execute(self, plan: Plan, nonce: int, report: bool) -> RunRecord:
+    def _execute(self, record: RunRecord, report: bool):
         from qibocal.auto.execute import Executor
 
-        record = RunRecord(plan, nonce, "failed")
+        plan = record.plan
         record.path = unique_output_path(self.output_root, plan)
         before = snapshot(self.platform)
         record.started = datetime.datetime.now()
         executor = None
         try:
-            with Executor.open(
-                path=record.path,
-                targets=list(plan.targets),
-                platform=self.platform,
-                force=False,
-                update=plan.update,
-            ) as executor:
+            with (
+                _disconnect_on_sigterm(self.platform),
+                Executor.open(
+                    path=record.path,
+                    targets=list(plan.targets),
+                    platform=self.platform,
+                    force=False,
+                    update=plan.update,
+                ) as executor,
+                _working_directory(record.path),
+            ):
                 completed = getattr(executor, plan.routine)(
                     targets=list(plan.targets),
                     update=plan.update,
@@ -1292,6 +1448,10 @@ class HardwareSession:
             record.data = completed.data
             record.results = completed.results
             record.status = "completed"
+        except KeyboardInterrupt:
+            record.status = "interrupted"
+            record.error = "interrupted by the operator"
+            raise
         except Exception as exc:  # noqa: BLE001
             record.error = "".join(traceback.format_exception_only(exc)).strip()
             record.traceback = traceback.format_exc()
@@ -1309,7 +1469,6 @@ class HardwareSession:
                 record.report = record.path / "index.html"
             except Exception as exc:  # noqa: BLE001
                 record.report_error = f"{type(exc).__name__}: {exc}"
-        return record
 
 
 # ---------------------------------------------------------------------------

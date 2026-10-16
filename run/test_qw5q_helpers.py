@@ -12,6 +12,7 @@ import dataclasses
 import hashlib
 import importlib.util
 import math
+import signal
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,8 @@ T1 = {
     "delay_max": "2000",
     "delay_step": "500",
     "amplitude_min": "0",
-    "amplitude_max": "0.1",
-    "amplitude_step": "0.05",
+    "amplitude_max": "0.08",
+    "amplitude_step": "0.04",
     "nshots": "50",
     "relaxation_time": "1000",
 }
@@ -113,10 +114,9 @@ def test_plan_validation(platform):
     assert plan.ok, plan.errors
     assert plan.parameters["nshots"] == 50
     preview = dict(plan.preview)
-    assert "Flux amplitudes (end included)" in preview
+    assert preview["Flux amplitudes, exact values"] == "[0.0, 0.04, 0.08]"
     assert "q0 predicted detuning" in preview
-    # Qibocal's inclusive range overshoots amplitude_max: it must be flagged
-    assert any("amplitude_max" in w for w in plan.warnings)
+    assert plan.overshoot == ()
 
     same = h.build_plan(platform, "t1_flux", T1, [0])
     other = h.build_plan(platform, "t1_flux", T1 | {"delay_step": "400"}, [0])
@@ -311,18 +311,278 @@ def test_unique_output_paths(platform, tmp_path):
     assert second != first and not second.exists()
 
 
-def test_notebook_opens_offline(monkeypatch):
+class Widget:
+    """Stand-in for a marimo UI element, overriding notebook definitions."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+def notebook_app():
+    spec = importlib.util.spec_from_file_location("qw5q_coherence_flux", NOTEBOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.app
+
+
+@pytest.fixture
+def host_sigterm():
+    """A host SIGTERM handler, as installed by the marimo kernel."""
+    calls = []
+
+    def host(signum, frame):
+        calls.append(signum)
+
+    previous = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, host)
+    yield host, calls
+    signal.signal(signal.SIGTERM, previous)
+
+
+def test_notebook_opens_offline(monkeypatch, host_sigterm):
     from qibolab import Platform
 
     def forbidden(self):
         raise AssertionError("the notebook connected on opening")
 
     monkeypatch.setattr(Platform, "connect", forbidden)
-    spec = importlib.util.spec_from_file_location("qw5q_coherence_flux", NOTEBOOK)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _, defs = module.app.run()
+    _, defs = notebook_app().run()
     assert defs["platform"].name == "mock"
     assert defs["plan"] is None
     assert defs["session"].records == []
     assert not defs["platform"].is_connected
+    # loading the platform must not hijack the kernel shutdown (export hang)
+    assert signal.getsignal(signal.SIGTERM) is host_sigterm[0]
+
+
+def test_notebook_click_and_reactive_reruns(platform, tmp_path):
+    app = notebook_app()
+    session = h.HardwareSession(platform, tmp_path)
+    values = FLUX | {"targets": [0], "update": False, "crosstalk_qubit": None}
+    raw = {k: v for k, v in values.items() if k not in ("targets", "update")}
+    expected = h.build_plan(platform, "flux_amplitude_frequency", raw, [0])
+
+    def defs(clicks, code=expected.fingerprint, consent=True, current=session):
+        return {
+            "platform": platform,
+            "session": current,
+            "routine_picker": Widget("flux_amplitude_frequency"),
+            "hardware_consent": Widget(consent),
+            "plan_form": Widget(dict(values)),
+            "allow_unverified": Widget(True),
+            "confirmation": Widget(code),
+            "overshoot_accepted": Widget(False),
+            "ranges_confirmed": Widget(True),
+            "warnings_reviewed": Widget(True),
+            "write_report": Widget(False),
+            "run_button": Widget(clicks),
+        }
+
+    # opening: the counter only sets the baseline
+    _, out = app.run(defs=defs(0))
+    assert out["plan"].fingerprint == expected.fingerprint
+    assert session.records == []
+    # a click runs once
+    app.run(defs=defs(1))
+    assert [r.status for r in session.records] == ["completed"]
+    # reactive re-execution with the same counter never runs again
+    app.run(defs=defs(1))
+    app.run(defs=defs(1, code="WRONG"))
+    assert len(session.records) == 1
+    # new clicks failing the gates are recorded, but nothing executes
+    app.run(defs=defs(2, code="WRONG"))
+    app.run(defs=defs(3, consent=False))
+    assert [r.status for r in session.records[1:]] == ["blocked", "blocked"]
+    assert len(list(tmp_path.rglob("meta.json"))) == 1
+    assert not platform.is_connected
+    # a new session (e.g. reopened notebook) with a stale counter never runs
+    fresh = h.HardwareSession(platform, tmp_path / "fresh")
+    app.run(defs=defs(7, current=fresh))
+    assert fresh.records == []
+
+
+def test_amplitude_overshoot_blocks_unless_accepted(platform):
+    raw = T1 | {"amplitude_max": "0.1", "amplitude_step": "0.05"}
+    plan = h.build_plan(platform, "t1_flux", raw, [0])
+    assert plan.ok, plan.errors
+    assert len(plan.overshoot) == 1 and "0.15000000000000002" in plan.overshoot[0]
+    exact = dict(plan.preview)["Flux amplitudes, exact values"]
+    assert exact == "[0.0, 0.05, 0.1, 0.15000000000000002]"
+
+    reasons = h.blocking_reasons(plan, approve(plan), True)
+    assert any("beyond the declared bounds" in r for r in reasons)
+    accepted = dataclasses.replace(approve(plan), overshoot_accepted=True)
+    assert h.blocking_reasons(plan, accepted, True) == []
+
+    # the suggested bound ends exactly at the intended amplitude
+    bound = plan.overshoot[0].rsplit("amplitude_max=", 1)[1].split(" ")[0]
+    fixed = h.build_plan(platform, "t1_flux", raw | {"amplitude_max": bound}, [0])
+    assert fixed.overshoot == ()
+    assert dict(fixed.preview)["Flux amplitudes, exact values"] == "[0.0, 0.05, 0.1]"
+
+
+@pytest.mark.parametrize(
+    ("routine", "keys", "base"),
+    [
+        (
+            "rabi_amplitude_ef",
+            ("min_amp", "max_amp", "step_amp"),
+            {"pulse_length": "40"},
+        ),
+        (
+            "flux_amplitude_frequency",
+            ("amplitude_min", "amplitude_max", "amplitude_step"),
+            FLUX,
+        ),
+    ],
+)
+def test_exclusive_bound_overshoot(platform, routine, keys, base):
+    raw = base | dict(zip(keys, ["1", "1.3", "0.1"], strict=True))
+    plan = h.build_plan(platform, routine, raw, [0])
+    assert plan.ok, plan.errors
+    assert plan.overshoot and "1.3000000000000003" in plan.overshoot[0]
+    bound = plan.overshoot[0].rsplit(f"{keys[1]}=", 1)[1].split(" ")[0]
+    fixed = h.build_plan(platform, routine, raw | {keys[1]: bound}, [0])
+    assert fixed.overshoot == ()
+
+
+def test_load_platform_keeps_host_signal_handlers(host_sigterm):
+    from qibocal.calibration import create_calibration_platform
+
+    host = host_sigterm[0]
+    previous = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, host)
+    try:
+        h.load_platform()
+        assert signal.getsignal(signal.SIGTERM) is host
+        assert signal.getsignal(signal.SIGINT) is host
+        # the hazard guarded against: Qibolab replaces both handlers
+        create_calibration_platform("mock")
+        assert signal.getsignal(signal.SIGTERM) is not host
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_sigterm_during_run_disconnects_first(
+    platform, tmp_path, monkeypatch, host_sigterm
+):
+    from qibocal.auto.execute import Executor
+
+    host, calls = host_sigterm
+    connected = []
+
+    def terminated(*args, **kwargs):
+        assert platform.is_connected
+        signal.raise_signal(signal.SIGTERM)
+        connected.append(platform.is_connected)
+        raise RuntimeError("terminated")
+
+    monkeypatch.setattr(Executor, "run_protocol", terminated)
+    plan = h.build_plan(platform, "flux_amplitude_frequency", FLUX, [0])
+    record = run(h.HardwareSession(platform, tmp_path), plan)
+    # disconnected before the host handler ran, which is restored afterwards
+    assert calls == [signal.SIGTERM] and connected == [False]
+    assert record.status == "failed" and record.disconnected
+    assert signal.getsignal(signal.SIGTERM) is host
+
+
+def test_interrupt_is_recorded_and_disconnects(platform, tmp_path, monkeypatch):
+    from qibocal.auto.execute import Executor
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Executor, "run_protocol", interrupted)
+    session = h.HardwareSession(platform, tmp_path)
+    plan = h.build_plan(platform, "flux_amplitude_frequency", FLUX, [0])
+    session.claim(0)
+    with pytest.raises(KeyboardInterrupt):
+        session.trigger(1, plan, approve(plan), True)
+    assert session.records[-1].status == "interrupted"
+    assert session.records[-1].disconnected and not platform.is_connected
+
+
+def test_partial_connection_is_cleaned_up(platform, tmp_path, monkeypatch):
+    from qibolab import Platform
+
+    class Partial:
+        is_connected = False
+
+        def connect(self):
+            self.is_connected = True
+
+        def disconnect(self):
+            self.is_connected = False
+
+    partial = Partial()
+    platform.instruments["partial"] = partial
+
+    def connect(self):
+        partial.connect()
+        raise RuntimeError("Cannot establish connection to instrument other")
+
+    monkeypatch.setattr(Platform, "connect", connect)
+    plan = h.build_plan(platform, "flux_amplitude_frequency", FLUX, [0])
+    record = run(h.HardwareSession(platform, tmp_path), plan)
+    assert record.status == "failed" and "Cannot establish" in record.error
+    assert record.disconnected and not partial.is_connected
+
+
+ROUTINE_INPUTS = {
+    "single_shot_classification": {"nshots": "50"},
+    "flux_amplitude_frequency": FLUX,
+    "t1_flux": T1,
+    "t2_flux": T1,
+    "qubit_spectroscopy_ef": {
+        "freq_width": "2e7",
+        "freq_step": "5e6",
+        "drive_duration": "1000",
+        "drive_amplitude": "0.1",
+        "nshots": "50",
+    },
+    "rabi_amplitude_ef": {
+        "min_amp": "0",
+        "max_amp": "0.5",
+        "step_amp": "0.1",
+        "pulse_length": "40",
+        "nshots": "50",
+    },
+    "dispersive_shift_qutrit": {
+        "freq_width": "4e6",
+        "freq_step": "1e6",
+        "nshots": "50",
+    },
+    "qutrit_classification": {"nshots": "50"},
+}
+
+
+@pytest.mark.parametrize("update", [False, True])
+@pytest.mark.parametrize("routine", list(h.ROUTINES))
+def test_every_routine_runs_on_mock(platform, tmp_path, monkeypatch, routine, update):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    files = digest(MOCK_PLATFORMS / "mock")
+    plan = h.build_plan(platform, routine, ROUTINE_INPUTS[routine], [0], update=update)
+    assert plan.ok and not plan.overshoot, (plan.errors, plan.overshoot)
+    record = run(h.HardwareSession(platform, tmp_path), plan)
+    assert record.status == "completed", record.traceback
+    assert record.disconnected and not platform.is_connected
+    assert (record.path / "platform").is_dir()
+    assert (record.path / "new_platform").is_dir()
+    if not update:
+        assert record.changes == []
+    figures, notes = h.record_figures(record)
+    assert figures or notes
+    assert digest(MOCK_PLATFORMS / "mock") == files
+    # nothing written relative to the working directory, which is restored
+    assert Path.cwd() == cwd and not any(cwd.iterdir())
+
+
+def test_classifiers_validated_before_acquisition(platform):
+    stale = {"classifiers_list": "naive_bayes"}
+    plan = h.build_plan(platform, "single_shot_classification", stale, [0])
+    assert any("unknown classifiers ['naive_bayes']" in e for e in plan.errors)
+    explicit = {"classifiers_list": "qubit_fit"}
+    assert h.build_plan(platform, "single_shot_classification", explicit, [0]).ok
+    assert h.build_plan(platform, "single_shot_classification", {}, [0]).ok
