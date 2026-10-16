@@ -4,6 +4,9 @@
 # Qibocal, Qibolab and the platforms are checked out at the verified upstream
 # commits (cf. run/qw5q_calibration.md): the project submodules are not used, nor
 # modified.
+# Existing checkouts must be clean (no modified or untracked files): local work is
+# never reset or deleted, the script stops instead. The virtual environment is
+# always recreated, and finally verified against the tested environment.
 #
 # Usage: run/qw5q_env.bash [DEST]     (default: /tmp/qw5q-env)
 # Requires git, uv and Python 3.13, e.g. in: nix shell nixpkgs#uv nixpkgs#python313
@@ -28,9 +31,18 @@ done
 
 checkout() {
     local repo=$1 ref=$2 dir="$DEST/src/$1"
+    if [ -e "$dir" ] && [ ! -d "$dir/.git" ]; then
+        echo "$dir exists, but it is not a Git checkout: remove it, or choose another DEST"
+        exit 1
+    fi
     if [ ! -d "$dir/.git" ]; then
         git clone --quiet --filter=blob:none --no-checkout \
             "https://github.com/qiboteam/$repo.git" "$dir"
+    elif [ -n "$(git -C "$dir" status --porcelain --untracked-files=normal)" ]; then
+        echo "$dir has local modifications or untracked files:"
+        git -C "$dir" status --short --untracked-files=normal | head -20
+        echo "Commit, stash or remove them (or choose another DEST), then rerun."
+        exit 1
     fi
     git -C "$dir" fetch --quiet --filter=blob:none origin "$ref"
     git -C "$dir" -c advice.detachedHead=false checkout --quiet --detach "$ref"
@@ -43,7 +55,9 @@ checkout qibocal "$QIBOCAL_REF"
 checkout qibolab "$QIBOLAB_REF"
 checkout qibolab_platforms_qrc "$PLATFORMS_REF"
 
-[ -d "$DEST/venv" ] || uv venv --quiet --python "$PYTHON" "$DEST/venv"
+# always recreated: no stale or extra package survives
+rm -rf "$DEST/venv"
+uv venv --quiet --python "$PYTHON" "$DEST/venv"
 VIRTUAL_ENV="$DEST/venv" uv pip install --quiet \
     --constraint "$SCRIPTDIR/qw5q_constraints.txt" \
     --editable "$DEST/src/qibolab" \
@@ -57,11 +71,26 @@ export QIBOLAB_PLATFORMS="$DEST/src/qibolab_platforms_qrc"
 export QIBO_BACKEND=numpy
 EOF
 
+# the same verification the notebook performs
+QIBOLAB_PLATFORMS="$DEST/src/qibolab_platforms_qrc" PYTHONDONTWRITEBYTECODE=1 \
+    "$DEST/venv/bin/python" - "$SCRIPTDIR" <<'EOF'
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import qw5q_helpers as h
+
+components = h.check_environment("qw5q_platinum")
+for row in h.environment_rows(components):
+    print(f"{row['status']:>4}  {row['component']:<22} {row['detail']}")
+if not h.environment_verified(components):
+    sys.exit("The environment does not match the tested one: see above.")
+EOF
+
 cat <<EOF
 
 Environment ready. From the repository root:
 
     . $DEST/env.bash
-    pytest run/test_qw5q_helpers.py         # offline, mock platform
+    run/qw5q_validate.bash                  # mandatory offline validation
     marimo edit run/qw5q_coherence_flux.py  # preflight is offline
 EOF

@@ -12,6 +12,7 @@ arbitrary units of the respective output.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import importlib
@@ -20,14 +21,17 @@ import math
 import os
 import pkgutil
 import platform as pyplatform
+import re
 import signal
 import subprocess
+import sys
 import threading
 import traceback
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -38,15 +42,21 @@ PLATFORM = os.environ.get("QW5Q_PLATFORM", "qw5q_platinum")
 The ``QW5Q_PLATFORM`` override only exists for offline tests (``mock``).
 """
 
-MIN_PYTHON = (3, 11)
-"""Required by Qibocal and Qibolab ``main``."""
+SUPPORTED_PYTHON = ((3, 11), (3, 14))
+"""Interval ``[min, max)`` required by Qibocal and Qibolab ``main``."""
+
+TESTED_PYTHON = "3.13.15"
+"""The only Python version the notebook was tested with."""
+
+CONSTRAINTS = Path(__file__).with_name("qw5q_constraints.txt")
+"""Exact package versions of the tested environment."""
 
 
 @dataclass(frozen=True)
 class Expected:
     module: str | None
     version: str | None
-    commit: str
+    commit: str | None
 
 
 EXPECTED = {
@@ -57,6 +67,7 @@ EXPECTED = {
     "qibolab_platforms_qrc": Expected(
         None, None, "e77ac724ccac2c3d98baf2e310ff6794a8823646"
     ),
+    "qibo": Expected("qibo", "0.3.6", None),
 }
 """Verified upstream revisions, cf. ``run/qw5q_calibration.md``."""
 
@@ -104,6 +115,8 @@ class Component:
     commit: str | None = None
     location: str | None = None
     error: str | None = None
+    problem: str | None = None
+    """Difference from the tested environment, e.g. local modifications."""
     expected_version: str | None = None
     expected_commit: str | None = None
 
@@ -111,6 +124,7 @@ class Component:
     def verified(self) -> bool:
         return (
             self.error is None
+            and self.problem is None
             and self.expected_version in (None, self.version)
             and self.expected_commit in (None, self.commit)
         )
@@ -122,21 +136,64 @@ class Component:
         return OK if self.verified else WARN
 
 
-def _git_head(root: Path) -> str | None:
-    """Commit checked out in ``root``, if it is the root of a Git checkout."""
-    if not (root / ".git").exists():
-        return None
+def _git(root: Path, *args: str) -> str | None:
     try:
         out = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
             check=True,
-            timeout=10,
+            timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return out.stdout.strip()
+    return out.stdout
+
+
+def git_state(root: Path) -> tuple[str | None, str | None]:
+    """Commit checked out in ``root``, and a description of local changes.
+
+    Only the root of a Git checkout is considered. Modified, staged and untracked
+    (non ignored) files all count as local changes.
+    """
+    if not (root / ".git").exists():
+        return None, "not a Git checkout"
+    head = _git(root, "rev-parse", "HEAD")
+    status = _git(root, "status", "--porcelain", "--untracked-files=normal")
+    if head is None or status is None:
+        return None, "cannot inspect the Git checkout"
+    changes = [line for line in status.splitlines() if line.strip()]
+    dirty = (
+        f"{len(changes)} locally modified or untracked path(s), e.g. `{changes[0][3:]}`"
+        if changes
+        else None
+    )
+    return head.strip(), dirty
+
+
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def package_mismatches(constraints: Path = CONSTRAINTS) -> list[str]:
+    """Installed distributions differing from the pinned versions."""
+    from importlib import metadata
+
+    installed = {}
+    for dist in metadata.distributions():
+        name = dist.metadata["Name"]
+        if name:
+            installed[_canonical(name)] = dist.version
+    mismatches = []
+    for line in constraints.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, version = line.partition("==")
+        found = installed.get(_canonical(name))
+        if found != version:
+            mismatches.append(f"{name} {found or 'missing'} (pinned {version})")
+    return mismatches
 
 
 def platforms_dir(name: str | None = None) -> Path | None:
@@ -149,19 +206,26 @@ def platforms_dir(name: str | None = None) -> Path | None:
 
 
 def check_environment(name: str | None = None) -> list[Component]:
-    """Collect versions and commits of the relevant components."""
+    """Compare the running environment with the tested one."""
     name = PLATFORM if name is None else name
     setup = "Set up the environment with `run/qw5q_env.bash`."
     components = []
 
     python = pyplatform.python_version()
+    low, high = SUPPORTED_PYTHON
+    supported = low <= tuple(map(int, python.split(".")[:2])) < high
     components.append(
         Component(
             "python",
             version=python,
+            location=sys.executable,
             error=None
-            if tuple(map(int, python.split(".")[:2])) >= MIN_PYTHON
-            else f"Python >= {'.'.join(map(str, MIN_PYTHON))} required. {setup}",
+            if supported
+            else f"Python >={'.'.join(map(str, low))},<{'.'.join(map(str, high))} "
+            f"required. {setup}",
+            problem=None
+            if python == TESTED_PYTHON
+            else f"supported, but only Python {TESTED_PYTHON} was tested",
         )
     )
 
@@ -180,35 +244,74 @@ def check_environment(name: str | None = None) -> list[Component]:
                 )
             )
             continue
+        if getattr(module, "__file__", None) is None:
+            components.append(
+                Component(
+                    key,
+                    error=f"`{exp.module}` is an empty namespace package (e.g. the "
+                    f"uninitialised submodule directory on `sys.path`). {setup}",
+                    expected_version=exp.version,
+                    expected_commit=exp.commit,
+                )
+            )
+            continue
         # editable installs from a `src/` layout checkout
         root = Path(module.__file__).resolve().parents[2]
+        head, dirty = git_state(root)
         components.append(
             Component(
                 key,
                 version=getattr(module, "__version__", None),
-                commit=_git_head(root),
+                commit=head,
                 location=str(root),
+                problem=dirty,
                 expected_version=exp.version,
                 expected_commit=exp.commit,
             )
         )
 
+    exp = EXPECTED["qibo"]
     try:
         qibo = importlib.import_module("qibo")
-        components.append(Component("qibo", version=qibo.__version__))
+        components.append(
+            Component("qibo", version=qibo.__version__, expected_version=exp.version)
+        )
     except Exception as exc:  # noqa: BLE001
-        components.append(Component("qibo", error=f"cannot import `qibo` ({exc})"))
+        components.append(
+            Component(
+                "qibo",
+                error=f"cannot import `qibo` ({exc})",
+                expected_version=exp.version,
+            )
+        )
+
+    if CONSTRAINTS.is_file():
+        mismatches = package_mismatches()
+        components.append(
+            Component(
+                "packages",
+                location=str(CONSTRAINTS),
+                problem=f"{len(mismatches)} differ from the pins: "
+                + ", ".join(mismatches[:5])
+                if mismatches
+                else None,
+            )
+        )
+    else:
+        components.append(Component("packages", error=f"missing {CONSTRAINTS.name}"))
 
     exp = EXPECTED["qibolab_platforms_qrc"]
     folder = platforms_dir(name)
+    head, dirty = (None, None) if folder is None else git_state(folder)
     components.append(
         Component(
             "qibolab_platforms_qrc",
-            commit=None if folder is None else _git_head(folder),
+            commit=head,
             location=None if folder is None else str(folder),
             error=None
             if folder is not None
             else f"`$QIBOLAB_PLATFORMS` has no `{name}` folder. {setup}",
+            problem=dirty,
             expected_commit=exp.commit if name == "qw5q_platinum" else None,
         )
     )
@@ -228,7 +331,7 @@ def environment_rows(components: Iterable[Component]) -> list[dict[str, str]]:
             "expected version": c.expected_version or "",
             "commit": (c.commit or "")[:12],
             "expected commit": (c.expected_commit or "")[:12],
-            "detail": c.error or c.location or "",
+            "detail": c.error or c.problem or c.location or "",
         }
         for c in components
     ]
@@ -331,10 +434,31 @@ def _fmt_hz(value: float) -> str:
     return f"{value / 1e9:.6f} GHz"
 
 
+AMPLITUDE_RANGE = 1.0
+"""Qibolab normalises amplitudes to [-1, 1], and the Qblox driver rejects any other.
+
+This is a representability bound, not a device safety limit.
+"""
+
+
+def _amplitudes(native) -> list[float]:
+    """Amplitudes of the pulses in a native, including readout probes."""
+    out = []
+    for _, pulse in native:
+        for p in (pulse, getattr(pulse, "probe", None)):
+            amplitude = getattr(p, "amplitude", None)
+            if amplitude is not None:
+                out.append(float(amplitude))
+    return out
+
+
 def _native_check(native, label: str) -> Check:
     if native is None or len(native) == 0:
         return Check(FAIL, f"{label} not calibrated (null)")
     channels = ", ".join(sorted({str(ch) for ch, _ in native}))
+    invalid = [a for a in _amplitudes(native) if not abs(a) <= AMPLITUDE_RANGE]
+    if invalid:
+        return Check(FAIL, f"{label} amplitude {invalid} outside [-1, 1] on {channels}")
     return Check(OK, f"{len(native)} pulse(s) on {channels}")
 
 
@@ -479,6 +603,10 @@ def _qubit_checks(platform, q) -> dict[str, Check]:
         amplitude = getattr(pulse, "amplitude", None)
         if not amplitude:
             checks["rx12"] = Check(FAIL, f"RX12 on {ch} has zero amplitude")
+        elif not abs(amplitude) <= AMPLITUDE_RANGE:
+            checks["rx12"] = Check(
+                FAIL, f"RX12 amplitude {amplitude!r} on {ch} outside [-1, 1]"
+            )
         elif ch12 is not None and ch != ch12:
             checks["rx12"] = Check(WARN, f"RX12 plays on {ch}, not on {ch12}")
         else:
@@ -793,9 +921,77 @@ def parse_field(spec: ScanField, raw: Any) -> Any:
     return value
 
 
+def _freeze(value: Any) -> Any:
+    """Deep, read-only copy of nested containers."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, list | tuple | set | frozenset):
+        return tuple(_freeze(v) for v in value)
+    return copy.deepcopy(value)
+
+
+def _thaw(value: Any) -> Any:
+    """Mutable copy of a frozen value, with lists in place of tuples."""
+    if isinstance(value, Mapping):
+        return {k: _thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(v) for v in value]
+    return copy.deepcopy(value)
+
+
+def _dump(model: Any, drop: frozenset[str] = frozenset({"id_"})) -> Any:
+    """JSON view of a model, without object identifiers."""
+
+    def strip(value):
+        if isinstance(value, dict):
+            return {k: strip(v) for k, v in value.items() if k not in drop}
+        if isinstance(value, list):
+            return [strip(v) for v in value]
+        return value
+
+    if model is None:
+        return None
+    if hasattr(model, "model_dump"):
+        return strip(model.model_dump(mode="json"))
+    return repr(model)
+
+
+def execution_state(platform, qubits: Iterable) -> str:
+    """Digest of the platform state determining what the qubits' routines play.
+
+    It covers the platform settings and, for each qubit, its channels with their
+    configurations (including LO, mixer and TWPA), natives and calibration.
+    """
+    state: dict[str, Any] = {"settings": _dump(platform.settings)}
+    for q in sorted(set(qubits), key=str):
+        if q not in platform.qubits:
+            continue
+        names = set()
+        for ch in platform.qubits[q].channels:
+            names.add(ch)
+            channel = platform.channels.get(ch)
+            for attr in ("lo", "mixer", "twpa_pump", "probe"):
+                ref = getattr(channel, attr, None)
+                if ref:
+                    names.add(ref)
+        configs = platform.parameters.configs
+        state[f"q{q}"] = {
+            "channels": {n: _dump(platform.channels.get(n)) for n in sorted(names)},
+            "configs": {n: _dump(configs.get(n)) for n in sorted(names)},
+            "natives": _dump(platform.natives.single_qubit.get(q)),
+            "calibration": _dump(platform.calibration.single_qubits.get(q)),
+        }
+    payload = json.dumps(state, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 @dataclass(frozen=True)
 class Plan:
-    """Immutable description of one action, as previewed to the operator."""
+    """Immutable description of one action, as previewed to the operator.
+
+    ``parameters`` and ``raw`` are deep, read-only copies: use :meth:`kwargs` for
+    a mutable copy of the parameters.
+    """
 
     platform: str
     routine: str
@@ -808,6 +1004,19 @@ class Plan:
     overshoot: tuple[str, ...] = ()
     """Amplitudes played beyond the declared bounds: blocking unless accepted."""
     preview: tuple[tuple[str, str], ...] = ()
+    state: str = ""
+    """Digest of the execution-relevant platform state, cf. :func:`execution_state`."""
+
+    def __post_init__(self):
+        object.__setattr__(self, "targets", tuple(self.targets))
+        object.__setattr__(self, "parameters", _freeze(self.parameters))
+        object.__setattr__(self, "raw", _freeze(self.raw))
+        for name in ("errors", "warnings", "overshoot", "preview"):
+            object.__setattr__(self, name, _freeze(getattr(self, name)))
+
+    def kwargs(self) -> dict[str, Any]:
+        """Fresh mutable copy of the parameters, for execution."""
+        return _thaw(self.parameters)
 
     @property
     def ok(self) -> bool:
@@ -815,14 +1024,18 @@ class Plan:
 
     @property
     def fingerprint(self) -> str:
-        """Confirmation code, changing with any executed input."""
+        """Confirmation code, changing with any executed input or previewed value,
+        and with the execution-relevant platform state."""
         payload = json.dumps(
             {
                 "platform": self.platform,
                 "routine": self.routine,
                 "targets": list(self.targets),
-                "parameters": dict(self.parameters),
+                "parameters": _thaw(self.parameters),
                 "update": self.update,
+                "preview": _thaw(self.preview),
+                "overshoot": _thaw(self.overshoot),
+                "state": self.state,
             },
             sort_keys=True,
             default=str,
@@ -900,6 +1113,24 @@ def _suggest_bound(start: float, step: float, intended: float, inclusive: bool):
     return None
 
 
+def _representable(review, label: str, values) -> None:
+    """Amplitudes outside Qibolab's normalised range cannot be played."""
+    values = np.atleast_1d(np.asarray(values, dtype=float))
+    invalid = values[~(np.abs(values) <= AMPLITUDE_RANGE)]
+    if invalid.size:
+        review.errors.append(
+            f"{label}: {_exact(invalid)} outside Qibolab's normalised amplitude range "
+            "[-1, 1], rejected by the Qblox driver"
+        )
+
+
+def _largest(review, *values) -> None:
+    played = np.concatenate([np.atleast_1d(np.asarray(v, dtype=float)) for v in values])
+    review.preview.append(
+        ("Largest |amplitude| played", f"{float(np.max(np.abs(played)))!r} a.u.")
+    )
+
+
 def _amplitude_sweep(review, label, params, keys, inclusive: bool):
     """Preview an amplitude sweep exactly, and flag points beyond its bound."""
     lo, hi, step = (params[k] for k in keys)
@@ -908,8 +1139,8 @@ def _amplitude_sweep(review, label, params, keys, inclusive: bool):
     review.preview += [
         (f"{label} ({keys[1]} {end})", _describe(values, "a.u.")),
         (f"{label}, exact values", _exact(values)),
-        ("Largest |amplitude| played", f"{float(np.max(np.abs(values)))!r} a.u."),
     ]
+    _representable(review, label, values)
     beyond = _beyond(values, hi, step, inclusive)
     if beyond.size:
         within = values[: values.size - beyond.size]
@@ -941,6 +1172,7 @@ def _review_coherence_flux(platform, params, proto, targets, checks, review):
     if not np.array_equal(swept, amps):
         review.errors.append("previewed amplitudes differ from Qibocal's flux_range")
         return
+    _largest(review, amps)
     for q in targets:
         coeffs = platform.calibration.single_qubits[q].qubit.flux_coefficients
         if coeffs is None or checks[q]["flux_coefficients"].status == FAIL:
@@ -975,8 +1207,10 @@ def _review_flux_amplitude(platform, params, proto, targets, checks, review):
             review.errors.append(f"unknown crosstalk qubit {crosstalk}")
         elif crosstalk in targets:
             review.errors.append("crosstalk qubit must differ from the targets")
-        elif platform.qubits[crosstalk].flux is None:
-            review.errors.append(f"crosstalk qubit {crosstalk} has no flux channel")
+        elif checks[crosstalk]["flux_channel"].status == FAIL:
+            review.errors.append(
+                f"crosstalk qubit q{crosstalk}: {checks[crosstalk]['flux_channel'].detail}"
+            )
     elif params.get("flux_pulse_amplitude", 0) != 0:
         review.warnings.append(
             "flux_pulse_amplitude is ignored without crosstalk qubit"
@@ -999,6 +1233,18 @@ def _review_flux_amplitude(platform, params, proto, targets, checks, review):
     amps = _amplitude_sweep(
         review, f"Flux amplitudes on {line}", params, keys, inclusive=False
     )
+    played = [amps]
+    if crosstalk is not None:
+        fixed = float(params.get("flux_pulse_amplitude", 0))
+        label = (
+            "Fixed flux amplitude on "
+            + ", ".join(f"q{q}" for q in targets)
+            + " (crosstalk mode)"
+        )
+        review.preview.append((label, f"{fixed!r} a.u."))
+        _representable(review, label, fixed)
+        played.append(fixed)
+    _largest(review, *played)
     review.preview.append(("Flux pulse duration", f"{params['duration']:g} ns"))
     review.points, review.sequences = amps.size, 2
 
@@ -1015,19 +1261,20 @@ def _review_spectroscopy_ef(platform, params, proto, targets, checks, review):
             continue
         center = platform.config(ch12).frequency
         freqs = np.arange(*proto.frequency_range(center))
-        review.preview.append(
-            (f"q{q} drive12 frequencies", _describe(freqs, "GHz", 1e-9, 9))
-        )
+        review.preview += [
+            (f"q{q} drive12 frequencies", _describe(freqs, "GHz", 1e-9, 9)),
+            (f"q{q} drive12 centre", f"{center!r} Hz"),
+        ]
         review.points = max(review.points, freqs.size)
-    review.preview += [
+    amplitude = float(params["drive_amplitude"])
+    review.preview.append(
         (
             "drive12 pulse",
-            (
-                f"rectangular, {params['drive_duration']} ns, "
-                f"amplitude {params['drive_amplitude']:g} a.u."
-            ),
-        ),
-    ]
+            f"rectangular, {params['drive_duration']} ns, amplitude {amplitude!r} a.u.",
+        )
+    )
+    _representable(review, "drive12 pulse amplitude", amplitude)
+    _largest(review, amplitude)
 
 
 def _review_rabi_ef(platform, params, proto, targets, checks, review):
@@ -1054,6 +1301,7 @@ def _review_rabi_ef(platform, params, proto, targets, checks, review):
         return
     keys = ("min_amp", "max_amp", "step_amp")
     amps = _amplitude_sweep(review, "RX12 amplitudes", params, keys, inclusive=False)
+    _largest(review, amps)
     review.points = amps.size
 
 
@@ -1068,9 +1316,10 @@ def _review_dispersive_qutrit(platform, params, proto, targets, checks, review):
     for q in targets:
         center = readout_frequency(q, platform, state=1)
         freqs = np.arange(*proto.frequency_range(center))
-        review.preview.append(
-            (f"q{q} probe frequencies", _describe(freqs, "GHz", 1e-9, 9))
-        )
+        review.preview += [
+            (f"q{q} probe frequencies", _describe(freqs, "GHz", 1e-9, 9)),
+            (f"q{q} probe centre (state 1)", f"{center!r} Hz"),
+        ]
         review.points = max(review.points, freqs.size)
     review.sequences = 3
 
@@ -1153,6 +1402,7 @@ def build_plan(
             errors.append(f"unknown classifiers {unknown}, available: {available}")
     review = _Review()
     overshoot: list[str] = []
+    crosstalk = params.get("crosstalk_qubit")
     preview: list[tuple[str, str]] = [
         ("Platform", platform.name),
         ("Routine", f"{routine} ({spec.title})"),
@@ -1215,6 +1465,9 @@ def build_plan(
         warnings=tuple(warnings),
         overshoot=tuple(overshoot),
         preview=tuple(preview),
+        state=execution_state(
+            platform, [*known, *([crosstalk] if crosstalk is not None else [])]
+        ),
     )
 
 
@@ -1273,6 +1526,7 @@ class RunRecord:
     finished: datetime.datetime | None = None
     report: Path | None = None
     report_error: str | None = None
+    environment: list[dict[str, str]] = field(default_factory=list)
 
 
 def unique_output_path(
@@ -1360,6 +1614,46 @@ def _load_task_data(path: Path, routine: str):
         return None
 
 
+RUN_METADATA = "qw5q_run.json"
+"""Notebook record written in each run folder, next to Qibocal's outputs."""
+
+
+def write_run_metadata(record: RunRecord) -> None:
+    """Record plan, outcome and environment, also for failed runs."""
+    if record.path is None or not record.path.is_dir():
+        return
+    plan = record.plan
+    data = {
+        "platform": plan.platform,
+        "routine": plan.routine,
+        "targets": list(plan.targets),
+        "parameters": plan.kwargs(),
+        "update": plan.update,
+        "fingerprint": plan.fingerprint,
+        "state": plan.state,
+        "preview": _thaw(plan.preview),
+        "warnings": _thaw(plan.warnings),
+        "overshoot": _thaw(plan.overshoot),
+        "nonce": record.nonce,
+        "status": record.status,
+        "error": record.error,
+        "disconnected": record.disconnected,
+        "changes": record.changes,
+        "started": record.started,
+        "finished": record.finished,
+        "report": record.report,
+        "report_error": record.report_error,
+        "python": sys.executable,
+        "environment": record.environment,
+    }
+    try:
+        (record.path / RUN_METADATA).write_text(
+            json.dumps(data, indent=2, default=str), encoding="utf-8"
+        )
+    except OSError:
+        traceback.print_exc()
+
+
 class HardwareSession:
     """Owns the in-memory platform and the executed actions.
 
@@ -1392,8 +1686,12 @@ class HardwareSession:
         gate: Gate,
         environment_ok: bool,
         report: bool = False,
+        environment: Iterable[Component] | None = None,
     ) -> RunRecord | None:
-        """Run ``plan`` if ``nonce`` is a new click and all gates pass."""
+        """Run ``plan`` if ``nonce`` is a new click and all gates pass.
+
+        ``environment`` is recorded in the run folder, if given.
+        """
         if not self.claim(nonce):
             return None
         if plan is None:
@@ -1405,14 +1703,27 @@ class HardwareSession:
             current = build_plan(
                 self.platform, plan.routine, dict(plan.raw), plan.targets, plan.update
             )
-            if current.fingerprint != plan.fingerprint or current.errors:
-                reasons.append("the platform changed since the plan was built: rebuild")
-            elif (current.warnings, current.overshoot) != (
-                plan.warnings,
-                plan.overshoot,
-            ):
-                reasons.append("the plan warnings changed: rebuild and review")
+            changed = [
+                name
+                for name in (
+                    "parameters",
+                    "preview",
+                    "state",
+                    "errors",
+                    "warnings",
+                    "overshoot",
+                )
+                if getattr(current, name) != getattr(plan, name)
+            ]
+            if changed or current.fingerprint != plan.fingerprint:
+                reasons.append(
+                    "the plan no longer matches the in-memory platform "
+                    f"({', '.join(changed) or 'fingerprint'} changed): rebuild and "
+                    "review"
+                )
         record = RunRecord(plan, int(nonce), "blocked", reasons=reasons)
+        if environment is not None:
+            record.environment = environment_rows(environment)
         # recorded before executing, to survive interruptions
         self.records.append(record)
         if not reasons:
@@ -1443,7 +1754,7 @@ class HardwareSession:
                 completed = getattr(executor, plan.routine)(
                     targets=list(plan.targets),
                     update=plan.update,
-                    **plan.parameters,
+                    **plan.kwargs(),
                 )
             record.data = completed.data
             record.results = completed.results
@@ -1460,6 +1771,7 @@ class HardwareSession:
             record.disconnected = _ensure_disconnected(self.platform)
             record.finished = datetime.datetime.now()
             record.changes = diff(before, snapshot(self.platform))
+            write_run_metadata(record)
 
         if report and executor is not None and record.status == "completed":
             try:
@@ -1469,6 +1781,7 @@ class HardwareSession:
                 record.report = record.path / "index.html"
             except Exception as exc:  # noqa: BLE001
                 record.report_error = f"{type(exc).__name__}: {exc}"
+            write_run_metadata(record)
 
 
 # ---------------------------------------------------------------------------

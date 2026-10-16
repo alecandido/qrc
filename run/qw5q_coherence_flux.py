@@ -34,7 +34,7 @@ def _(h, mo):
         Hardware is only accessed after
 
         1. enabling hardware access,
-        2. submitting a plan (immutable once submitted) and reviewing its preview,
+        2. submitting a plan (a frozen copy of the form) and reviewing its preview,
         3. confirming the scan ranges and typing the plan confirmation code,
         4. clicking **Run on hardware**: each click runs at most once.
 
@@ -66,17 +66,19 @@ def _(h, mo):
             mo.md("## 1. Environment"),
             mo.callout(
                 mo.md(
-                    "All components match the verified revisions."
+                    "Matches the tested environment: Python version, every package "
+                    "pin, and clean source checkouts at the verified commits."
                     if environment_ok
-                    else "**The environment differs from the verified revisions.** "
-                    "Use `run/qw5q_env.bash`, or explicitly allow it when running."
+                    else "**The environment differs from the tested one** (see the "
+                    "table). Use `run/qw5q_env.bash`, or explicitly allow it when "
+                    "running."
                 ),
                 kind="success" if environment_ok else "warn",
             ),
             mo.ui.table(h.environment_rows(components), selection=None),
         ]
     )
-    return (environment_ok,)
+    return components, environment_ok
 
 
 @app.cell
@@ -251,7 +253,13 @@ def _(checks, h, mo, plan_form, routine_picker, session):
                 )
             )
         if plan.ok:
-            _items.append(mo.md(f"Confirmation code: **`{plan.fingerprint}`**"))
+            _items.append(
+                mo.md(
+                    f"Confirmation code: **`{plan.fingerprint}`** (binds parameters, "
+                    "exact preview and the platform state of the involved qubits, "
+                    f"digest `{plan.state[:12]}`: any change requires a new code)"
+                )
+            )
         _out = mo.vstack(_items)
     _out
     return (plan,)
@@ -316,6 +324,7 @@ def _(mo):
 @app.cell
 def _(
     allow_unverified,
+    components,
     confirmation,
     environment_ok,
     h,
@@ -344,7 +353,12 @@ def _(
     _record = None
     try:
         _record = session.trigger(
-            run_button.value, plan, _gate, environment_ok, report=write_report.value
+            run_button.value,
+            plan,
+            _gate,
+            environment_ok,
+            report=write_report.value,
+            environment=components,
         )
     finally:
         # also after interruptions, which are recorded before re-raising

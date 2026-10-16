@@ -1,28 +1,44 @@
-"""Offline smoke tests for the ``qw5q_coherence_flux.py`` notebook.
+"""Mandatory offline safety tests for the ``qw5q_coherence_flux.py`` notebook.
 
 They exercise the real execution helper (Qibocal ``Executor`` included) on the
 ``mock`` platform shipped with Qibocal's tests, driven by Qibolab's dummy
-instrument: no hardware is involved.
-From an environment created with ``run/qw5q_env.bash``::
+instrument, and load the stock ``qw5q_platinum`` offline: no hardware is involved.
+Missing requirements fail, instead of skipping. Run them through the validation
+entry point, in the environment created with ``run/qw5q_env.bash``::
 
-    pytest run/test_qw5q_helpers.py
+    run/qw5q_validate.bash
 """
 
 import dataclasses
 import hashlib
 import importlib.util
 import math
+import os
 import signal
+import subprocess
 from pathlib import Path
 
 import pytest
 
-qibocal = pytest.importorskip("qibocal")
+SETUP = "create and source the environment of run/qw5q_env.bash"
+
+try:
+    import qibocal
+
+    if getattr(qibocal, "__file__", None) is None:
+        raise ImportError(
+            "only an empty namespace package found, e.g. the uninitialised qibocal "
+            "submodule directory"
+        )
+except ImportError as exc:
+    pytest.fail(f"qibocal is required by these tests ({exc}): {SETUP}", pytrace=False)
 
 import qw5q_helpers as h
 
 MOCK_PLATFORMS = Path(qibocal.__file__).resolve().parents[2] / "tests" / "platforms"
 NOTEBOOK = Path(__file__).parent / "qw5q_coherence_flux.py"
+VERIFIED_PLATFORMS = os.environ.get("QIBOLAB_PLATFORMS", "")
+"""Platforms checkout configured by the environment, before tests switch to mock."""
 
 FLUX = {
     "amplitude_min": "0",
@@ -48,8 +64,9 @@ ALLOW = h.Gate(hardware_consent=True, ranges_confirmed=True, warnings_reviewed=T
 @pytest.fixture(autouse=True)
 def mock_environment(monkeypatch):
     if not (MOCK_PLATFORMS / "mock").is_dir():
-        pytest.skip(
-            "Qibocal mock platform not found (editable qibocal checkout needed)"
+        pytest.fail(
+            f"Qibocal mock platform not found in {MOCK_PLATFORMS}: {SETUP}",
+            pytrace=False,
         )
     monkeypatch.setenv("QIBOLAB_PLATFORMS", str(MOCK_PLATFORMS))
     monkeypatch.setattr(h, "PLATFORM", "mock")
@@ -83,9 +100,8 @@ def digest(folder: Path) -> dict[str, str]:
 
 def test_environment_components():
     names = {c.name: c for c in h.check_environment()}
-    assert {"python", "qibocal", "qibolab", "qibo", "qibolab_platforms_qrc"} <= set(
-        names
-    )
+    expected = {"python", "qibocal", "qibolab", "qibo", "packages"}
+    assert expected | {"qibolab_platforms_qrc"} <= set(names)
     assert names["qibolab_platforms_qrc"].error is None
 
 
@@ -437,10 +453,11 @@ def test_amplitude_overshoot_blocks_unless_accepted(platform):
     ],
 )
 def test_exclusive_bound_overshoot(platform, routine, keys, base):
-    raw = base | dict(zip(keys, ["1", "1.3", "0.1"], strict=True))
+    # np.arange(0.1, 0.4, 0.1) plays the excluded bound 0.4
+    raw = base | dict(zip(keys, ["0.1", "0.4", "0.1"], strict=True))
     plan = h.build_plan(platform, routine, raw, [0])
     assert plan.ok, plan.errors
-    assert plan.overshoot and "1.3000000000000003" in plan.overshoot[0]
+    assert plan.overshoot and "plays [0.4] beyond" in plan.overshoot[0]
     bound = plan.overshoot[0].rsplit(f"{keys[1]}=", 1)[1].split(" ")[0]
     fixed = h.build_plan(platform, routine, raw | {keys[1]: bound}, [0])
     assert fixed.overshoot == ()
@@ -586,3 +603,328 @@ def test_classifiers_validated_before_acquisition(platform):
     explicit = {"classifiers_list": "qubit_fit"}
     assert h.build_plan(platform, "single_shot_classification", explicit, [0]).ok
     assert h.build_plan(platform, "single_shot_classification", {}, [0]).ok
+
+
+# --- critic findings ---------------------------------------------------------
+
+QUTRIT_INPUTS = {
+    name: ROUTINE_INPUTS[name]
+    for name in (
+        "qubit_spectroscopy_ef",
+        "rabi_amplitude_ef",
+        "dispersive_shift_qutrit",
+        "qutrit_classification",
+    )
+}
+
+
+def approve_all(plan: h.Plan) -> h.Gate:
+    return dataclasses.replace(approve(plan), overshoot_accepted=True)
+
+
+def test_stock_qw5q_platinum_blocks_every_qutrit_plan(monkeypatch):
+    from qibolab._core.instruments.qblox.cluster import Cluster
+
+    from qibolab import Platform
+
+    entries = [e for e in VERIFIED_PLATFORMS.split(os.pathsep) if e]
+    stock = next(
+        (Path(e) for e in entries if (Path(e) / "qw5q_platinum").is_dir()), None
+    )
+    if stock is None:
+        pytest.fail(f"no qw5q_platinum in $QIBOLAB_PLATFORMS: {SETUP}", pytrace=False)
+    expected = h.EXPECTED["qibolab_platforms_qrc"].commit
+    assert h.git_state(stock) == (expected, None), "platforms checkout not verified"
+
+    def forbidden(self):
+        raise AssertionError("connection attempted")
+
+    monkeypatch.setattr(Platform, "connect", forbidden)
+    monkeypatch.setattr(Cluster, "connect", forbidden)
+    monkeypatch.setenv("QIBOLAB_PLATFORMS", str(stock))
+    monkeypatch.setattr(h, "PLATFORM", "qw5q_platinum")
+
+    platform = h.load_platform()
+    checks = h.preflight(platform)
+    assert sorted(platform.qubits) == [0, 1, 2, 3, 4]
+    for q, qubit in platform.qubits.items():
+        assert (1, 2) not in qubit.drive_extra
+        assert not any("drive12" in str(c) for c in platform.parameters.configs)
+        assert platform.natives.single_qubit[q].RX12 is None
+        assert checks[q]["drive12_channel"].status == h.FAIL
+        assert checks[q]["rx12"].status == h.FAIL
+        for routine, values in QUTRIT_INPUTS.items():
+            plan = h.build_plan(platform, routine, values, [q], checks=checks)
+            assert any("drive12 channel" in e for e in plan.errors), (routine, q)
+            status = h.routine_status(h.ROUTINES[routine], checks[q])
+            assert status.startswith("blocked: drive12 channel"), (routine, q)
+    # flux routines need coefficients, missing on q0/q1
+    for q in (0, 1):
+        assert not h.build_plan(platform, "t1_flux", T1, [q], checks=checks).ok
+    assert not platform.is_connected
+
+
+@pytest.mark.parametrize(
+    ("routine", "values", "mutate"),
+    [
+        (
+            "t1_flux",
+            T1,
+            lambda p: setattr(
+                p.calibration.single_qubits[0].qubit,
+                "flux_coefficients",
+                [-2.5, 0.1, 0.001],
+            ),
+        ),
+        (
+            "qubit_spectroscopy_ef",
+            ROUTINE_INPUTS["qubit_spectroscopy_ef"],
+            lambda p: p.update({"configs.0/drive12.frequency": 4.71e9}),
+        ),
+        (
+            "dispersive_shift_qutrit",
+            ROUTINE_INPUTS["dispersive_shift_qutrit"],
+            lambda p: p.calibration.single_qubits[0].readout.qudits_frequency.update(
+                {1: 5.123e9}
+            ),
+        ),
+        (
+            "t2_flux",
+            T1,
+            lambda p: p.update({"configs.0/drive.frequency": 4.01e9}),
+        ),
+    ],
+)
+def test_confirmation_bound_to_platform_state(
+    platform, tmp_path, routine, values, mutate
+):
+    session = h.HardwareSession(platform, tmp_path)
+    plan = h.build_plan(platform, routine, values, [0])
+    assert plan.ok, plan.errors
+    mutate(platform)
+    session.claim(0)
+    record = session.trigger(1, plan, approve_all(plan), True)
+    assert record.status == "blocked"
+    assert any("no longer matches" in r for r in record.reasons), record.reasons
+    assert not any(tmp_path.iterdir())
+    # a rebuilt plan has a new code, and runs
+    rebuilt = h.build_plan(platform, routine, values, [0])
+    assert rebuilt.fingerprint != plan.fingerprint
+    assert session.trigger(2, rebuilt, approve_all(rebuilt), True).status == "completed"
+
+
+def test_unrelated_qubit_changes_keep_the_code(platform):
+    plan = h.build_plan(platform, "t1_flux", T1, [0])
+    platform.calibration.single_qubits[1].qubit.flux_coefficients = [-3.0, 0.0, 0.0]
+    assert h.build_plan(platform, "t1_flux", T1, [0]).fingerprint == plan.fingerprint
+
+
+def test_plan_is_immutable(platform):
+    raw = {"classifiers_list": "qubit_fit", "nshots": "50"}
+    plan = h.build_plan(platform, "single_shot_classification", raw, [0])
+    with pytest.raises(TypeError):
+        plan.parameters["nshots"] = 1
+    assert plan.parameters["classifiers_list"] == ("qubit_fit",)
+    kwargs = plan.kwargs()
+    kwargs["classifiers_list"].append("qblox_fit")
+    kwargs["nshots"] = 1
+    raw["nshots"] = "1"
+    assert plan.kwargs() == {
+        "classifiers_list": ["qubit_fit"],
+        "nshots": 50,
+        "relaxation_time": platform.settings.relaxation_time,
+    }
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.update = True
+
+
+def crosstalk(**values):
+    return FLUX | {"amplitude_min": "0.1", "crosstalk_qubit": 1} | values
+
+
+def test_crosstalk_fixed_amplitude_previewed(platform):
+    plan = h.build_plan(
+        platform,
+        "flux_amplitude_frequency",
+        crosstalk(flux_pulse_amplitude="-0.7"),
+        [0],
+    )
+    assert plan.ok, plan.errors
+    preview = dict(plan.preview)
+    assert preview["Fixed flux amplitude on q0 (crosstalk mode)"] == "-0.7 a.u."
+    assert preview["Largest |amplitude| played"] == "0.7 a.u."
+    other = h.build_plan(
+        platform,
+        "flux_amplitude_frequency",
+        crosstalk(flux_pulse_amplitude="-0.6"),
+        [0],
+    )
+    assert other.fingerprint != plan.fingerprint
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        crosstalk(flux_pulse_amplitude="1e6"),
+        crosstalk(flux_pulse_amplitude="-1.0001"),
+        crosstalk(amplitude_max="1.5"),
+    ],
+)
+def test_unrepresentable_amplitudes_block(platform, values):
+    plan = h.build_plan(platform, "flux_amplitude_frequency", values, [0])
+    assert any("outside Qibolab's normalised" in e for e in plan.errors), plan.errors
+
+
+def test_crosstalk_channel_validated(platform):
+    del platform.parameters.configs["1/flux"]
+    plan = h.build_plan(platform, "flux_amplitude_frequency", crosstalk(), [0])
+    assert any("q1: 1/flux has no DC config" in e for e in plan.errors), plan.errors
+    platform.qubits[1].flux = "1/unmapped"
+    plan = h.build_plan(platform, "flux_amplitude_frequency", crosstalk(), [0])
+    assert any("q1: no flux channel" in e for e in plan.errors), plan.errors
+
+
+@pytest.mark.parametrize(("amplitude", "ok"), [("-0.1", True), ("1.5", False)])
+def test_drive12_amplitude_representability(platform, amplitude, ok):
+    values = ROUTINE_INPUTS["qubit_spectroscopy_ef"] | {"drive_amplitude": amplitude}
+    plan = h.build_plan(platform, "qubit_spectroscopy_ef", values, [0])
+    assert plan.ok is ok, plan.errors
+    pulse = dict(plan.preview)["drive12 pulse"]
+    assert pulse.endswith(f"amplitude {float(amplitude)!r} a.u.")
+
+
+def without_rx12(platform):
+    platform.update({"native_gates.single_qubit.0.RX12": None})
+    assert platform.natives.single_qubit[0].RX12 is None
+    return platform
+
+
+def test_rx12_bootstrap_executes(platform, tmp_path):
+    without_rx12(platform)
+    checks = h.preflight(platform)
+    assert checks[0]["rx12"].status == h.FAIL
+    for routine in ("dispersive_shift_qutrit", "qutrit_classification"):
+        plan = h.build_plan(platform, routine, ROUTINE_INPUTS[routine], [0])
+        assert any("RX12" in e for e in plan.errors), routine
+
+    session = h.HardwareSession(platform, tmp_path)
+    spectroscopy = h.build_plan(
+        platform, "qubit_spectroscopy_ef", ROUTINE_INPUTS["qubit_spectroscopy_ef"], [0]
+    )
+    assert run(session, spectroscopy).status == "completed"
+
+    plan = h.build_plan(
+        platform, "rabi_amplitude_ef", ROUTINE_INPUTS["rabi_amplitude_ef"], [0], True
+    )
+    assert any("bootstrap: rectangular, 40 ns" in v for _, v in plan.preview)
+    record = run(session, plan)
+    assert record.status == "completed", record.traceback
+    assert record.data.durations == {0: 40.0}
+    amplitude = record.results.amplitude[0]
+    rx12 = platform.natives.single_qubit[0].RX12
+    if amplitude is None:
+        assert rx12 is None
+    else:
+        [(channel, pulse)] = rx12
+        assert channel == "0/drive12"
+        assert pulse.envelope.kind == "rectangular"
+        assert pulse.duration == 40.0 and pulse.amplitude == amplitude
+        # out of range fits are stored by Qibocal, but blocked by preflight
+        status = h.preflight(platform)[0]["rx12"].status
+        assert status == (h.OK if abs(amplitude) <= 1 else h.FAIL)
+
+
+def test_unrepresentable_native_blocks(platform):
+    from qibolab import Pulse, Rectangular
+
+    pulse = Pulse(duration=40, amplitude=16.5, envelope=Rectangular())
+    platform.update({"native_gates.single_qubit.0.RX12": [("0/drive12", pulse)]})
+    checks = h.preflight(platform)
+    assert checks[0]["rx12"].status == h.FAIL
+    plan = h.build_plan(platform, "qutrit_classification", {}, [0], checks=checks)
+    assert any("outside [-1, 1]" in e for e in plan.errors)
+
+
+def test_run_metadata_recorded(platform, tmp_path):
+    import json
+
+    plan = h.build_plan(platform, "t1_flux", T1, [0])
+    session = h.HardwareSession(platform, tmp_path)
+    session.claim(0)
+    environment = h.check_environment()
+    record = session.trigger(1, plan, approve(plan), True, environment=environment)
+    data = json.loads((record.path / h.RUN_METADATA).read_text())
+    assert data["fingerprint"] == plan.fingerprint and data["status"] == "completed"
+    assert data["state"] == plan.state and data["parameters"]["nshots"] == 50
+    assert {row["component"] for row in data["environment"]} >= {"python", "packages"}
+
+
+def git(root, *args):
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+def test_dirty_checkouts_not_verified(tmp_path):
+    git(tmp_path, "init", "-q")
+    (tmp_path / "a.txt").write_text("a")
+    git(tmp_path, "add", "a.txt")
+    git(
+        tmp_path,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "a",
+    )
+    head, dirty = h.git_state(tmp_path)
+    assert head and dirty is None
+    (tmp_path / "untracked.txt").write_text("b")
+    assert "untracked.txt" in h.git_state(tmp_path)[1]
+    (tmp_path / "untracked.txt").unlink()
+    (tmp_path / "a.txt").write_text("changed")
+    _, dirty = h.git_state(tmp_path)
+    assert "a.txt" in dirty
+    component = h.Component("qibocal", commit=head, problem=dirty, expected_commit=head)
+    assert not component.verified and component.status == h.WARN
+    assert h.git_state(tmp_path / "missing") == (None, "not a Git checkout")
+
+
+def test_package_pins_compared(tmp_path):
+    constraints = tmp_path / "constraints.txt"
+    constraints.write_text("# comment\npytest==0.0.1\nnot-installed-xyz==1.0\n")
+    mismatches = h.package_mismatches(constraints)
+    assert len(mismatches) == 2 and "not-installed-xyz missing" in mismatches[1]
+
+
+@pytest.mark.parametrize(
+    ("version", "status"), [("3.13.15", h.OK), ("3.13.1", h.WARN), ("3.14.0", h.FAIL)]
+)
+def test_python_supported_and_tested(monkeypatch, version, status):
+    monkeypatch.setattr(h.pyplatform, "python_version", lambda: version)
+    python = next(c for c in h.check_environment() if c.name == "python")
+    assert python.status == status
+
+
+@pytest.mark.parametrize(
+    ("routine", "label", "acquired"),
+    [
+        ("t1_flux", "Flux amplitudes", lambda d: d.flux_range),
+        ("t2_flux", "Flux amplitudes", lambda d: d.flux_range),
+        (
+            "flux_amplitude_frequency",
+            "Flux amplitudes on target qubits",
+            lambda d: d.data[(0, "X")]["amplitude"],
+        ),
+        ("rabi_amplitude_ef", "RX12 amplitudes", lambda d: d.data[0]["amp"]),
+    ],
+)
+def test_preview_matches_acquired_sweep(platform, tmp_path, routine, label, acquired):
+    plan = h.build_plan(platform, routine, ROUTINE_INPUTS[routine], [0])
+    record = run(h.HardwareSession(platform, tmp_path), plan)
+    assert record.status == "completed", record.traceback
+    previewed = dict(plan.preview)[f"{label}, exact values"]
+    assert previewed == h._exact(acquired(record.data))
