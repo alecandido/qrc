@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -p agnostic0
+#SBATCH -p qw5q_platinum
 #SBATCH -o var/out.ansi
 
 SCRIPTPATH=$(scontrol show job "$SLURM_JOB_ID" | awk -F= '/Command=/{print $2}')
