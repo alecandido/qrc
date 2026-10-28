@@ -20,12 +20,11 @@
       enable = true;
       sync = {
         enable = true;
-        # keep the packages installed by install.bash
-        arguments = [
-          "--locked"
-          "--inexact"
+        arguments = [ "--locked" ];
+        groups = [
+          "dev"
+          "qblox"
         ];
-        groups = [ "dev" ];
       };
     };
   };
