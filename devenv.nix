@@ -3,7 +3,6 @@
   packages = with pkgs; [
     prek
     poethepoet
-    jupyter
   ];
 
   env = {
