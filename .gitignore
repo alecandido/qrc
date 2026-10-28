@@ -1,6 +1,11 @@
 __pycache__/
 
-.devenv
+# devenv
+.devenv/
+.devenv.flake.nix
+.direnv/
+devenv.local.nix
+.venv/
 
 var/*
 !var/README.md
