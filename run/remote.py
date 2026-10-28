@@ -90,21 +90,19 @@ def _():
     ## 3. The remote executor
 
     The executor records every execution in its session folder, here, as
-    local executions are. Within a Qibocamp session, the folder defaults to its
-    reports folder (`QIBOCAMP_REPORTS_DIR`), so that calibrations show up in
-    its dashboard.
+    local executions are.
     """)
     return
 
 
 @app.cell
-def _(remote):
-    if reports_dir() is None:
-        path = HERE.parent / "var" / "remote"
-        if path.exists():
-            shutil.rmtree(path)
-    else:
-        path = None
+def _(datetime, remote):
+    path = (
+        HERE.parent
+        / "var"
+        / "remote"
+        / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    )
 
     executor = Executor(
         None,
@@ -152,6 +150,36 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Spectroscopies
+    """)
+    return
+
+
+@app.cell
+def _(executor):
+    executor.submit(
+        protocols.qubit_flux(
+            frequency=("lincenter", 100e6, 30),
+            bias=("lincenter", 0.3, 30),
+        ),
+        nshots=int(1e3),
+        reuse=True,
+        targets=[4],
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Single-qubit gate
+    """)
+    return
+
+
 @app.cell
 def _(executor):
     executor.submit(
@@ -181,6 +209,33 @@ def _(executor):
         nshots=500,
         reuse=True,
         targets=[4],
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Two-qubit gates
+    """)
+    return
+
+
+@app.cell
+def _(executor):
+    executor.submit(
+        protocols.chevron(
+            amplitude_min=0.01,
+            amplitude_max=0.2,
+            amplitude_step=0.01,
+            duration_min=8.0,
+            duration_max=80.0,
+            duration_step=4.0,
+            dt=4,
+        ),
+        nshots=100,
+        reuse=True,
+        targets=[[2, 4]],
     )
     return
 
