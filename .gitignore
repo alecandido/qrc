@@ -9,3 +9,6 @@ devenv.local.nix
 
 var/*
 !var/README.md
+
+# marimo snapshots and data
+__marimo__/
