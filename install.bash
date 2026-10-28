@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-inst='poetry run pip install'
+inst='uv pip install'
 
 $inst qibolab-qm qibolab-qblox
 $inst -e ./qibocal

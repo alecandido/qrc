@@ -16,10 +16,16 @@
     libraries = with pkgs; [ zlib ];
     # latest release in the nixpkgs-python cache: never build the interpreter
     version = "3.13.17";
-    poetry = {
+    venv.enable = true;
+    uv = {
       enable = true;
-      install = {
+      sync = {
         enable = true;
+        # keep the packages installed by install.bash
+        arguments = [
+          "--locked"
+          "--inexact"
+        ];
         groups = [ "dev" ];
       };
     };

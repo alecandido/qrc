@@ -7,4 +7,4 @@ SCRIPTDIR=$(dirname "$SCRIPTPATH")
 BASEDIR=$(dirname "$SCRIPTDIR")
 . "$SCRIPTDIR/env.bash" $BASEDIR
 
-poetry run python -u "$SCRIPTDIR/$1.py" "$BASEDIR/var"
+uv run python -u "$SCRIPTDIR/$1.py" "$BASEDIR/var"
