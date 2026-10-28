@@ -8,6 +8,7 @@ with app.setup(hide_code=True):
     import os
     import shutil
     from pathlib import Path
+    from datetime import datetime
 
     import marimo as mo
     from qibocal import protocols
@@ -96,7 +97,7 @@ def _():
 
 
 @app.cell
-def _(datetime, remote):
+def _(remote):
     path = (
         HERE.parent
         / "var"
@@ -108,6 +109,8 @@ def _(datetime, remote):
         None,
         path=path,
         update=True,
+        reuse=True,
+        confirm=True,
         runner=remote,
         frontends=[Marimo()],
     )
@@ -153,21 +156,37 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    #### Targets
+
+    Define the target to operate on.
+    """)
+    return
+
+
+@app.cell
+def _():
+    targets = [(2, 4)]
+    targets = [4]
+    return (targets,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ### Spectroscopies
     """)
     return
 
 
 @app.cell
-def _(executor):
+def _(executor, targets):
     executor.submit(
         protocols.qubit_flux(
-            frequency=("lincenter", 100e6, 30),
-            bias=("lincenter", 0.3, 30),
+            frequency=("linspace", 6.17e9, 6.27e9, 40),
+            bias=("lincenter", 0.3, 60),
         ),
-        nshots=int(1e3),
-        reuse=True,
-        targets=[4],
+        nshots=50,
+        targets=targets,
     )
     return
 
@@ -181,34 +200,31 @@ def _():
 
 
 @app.cell
-def _(executor):
+def _(executor, targets):
     executor.submit(
         protocols.single_shot_classification(),
         nshots=int(1e3),
-        reuse=True,
-        targets=[4],
+        targets=targets,
     )
     return
 
 
 @app.cell
-def _(executor):
+def _(executor, targets):
     executor.submit(
         protocols.rabi_amplitude(min_amp=0.01, max_amp=0.5, step_amp=0.01),
         nshots=100,
-        reuse=True,
-        targets=[4],
+        targets=targets,
     )
     return
 
 
 @app.cell
-def _(executor):
+def _(executor, targets):
     executor.submit(
-        protocols.ramsey(delay=(10, 50e3, 1.5e3)),
-        nshots=500,
-        reuse=True,
-        targets=[4],
+        protocols.ramsey(delay=(10, 5e3, 0.15e3)),
+        nshots=200,
+        targets=targets,
     )
     return
 
@@ -234,7 +250,7 @@ def _(executor):
             dt=4,
         ),
         nshots=100,
-        reuse=True,
+        # targets=targets,
         targets=[[2, 4]],
     )
     return
