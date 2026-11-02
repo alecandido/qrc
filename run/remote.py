@@ -178,14 +178,14 @@ def _():
     return
 
 
-@app.cell
+@app.cell(expand_output=True)
 def _(executor, targets):
     executor.submit(
         protocols.qubit_flux(
             frequency=("linspace", 6.17e9, 6.27e9, 40),
             bias=("lincenter", 0.3, 60),
         ),
-        nshots=50,
+        nshots=1000,
         targets=targets,
     )
     return
@@ -199,7 +199,7 @@ def _():
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
     executor.submit(
         protocols.single_shot_classification(),
@@ -209,7 +209,7 @@ def _(executor, targets):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
     executor.submit(
         protocols.rabi_amplitude(min_amp=0.01, max_amp=0.5, step_amp=0.01),
@@ -219,11 +219,81 @@ def _(executor, targets):
     return
 
 
+@app.cell(expand_output=True)
+def _(executor, targets):
+    executor.submit(
+        protocols.ramsey(delay=(10, 20e3, 0.30e3)),
+        nshots=2000,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Coherences
+    """)
+    return
+
+
 @app.cell
 def _(executor, targets):
     executor.submit(
-        protocols.ramsey(delay=(10, 5e3, 0.15e3)),
+        protocols.t1(
+            delay_before_readout_start=1e3,
+            delay_before_readout_end=20e3,
+            delay_before_readout_step=0.5e3,
+        ),
         nshots=200,
+        targets=targets,
+    )
+    return
+
+
+@app.cell
+def _(executor, targets):
+    executor.submit(
+        protocols.t2(
+            delay_between_pulses_start=1e3,
+            delay_between_pulses_end=20e3,
+            delay_between_pulses_step=0.5e3,
+        ),
+        nshots=200,
+        targets=targets,
+    )
+    return
+
+
+@app.cell
+def _(executor, targets):
+    executor.submit(
+        protocols.t1_flux(
+            delay_min=1e3,
+            delay_max=60e3,
+            delay_step=2e3,
+            amplitude_min=0.08,
+            amplitude_max=0.4,
+            amplitude_step=0.01,
+        ),
+        nshots=1000,
+        targets=targets,
+    )
+    return
+
+
+@app.cell
+def _(executor, targets):
+    executor.submit(
+        protocols.t2_flux(
+            delay_min=0.2e3,
+            delay_max=15e3,
+            delay_step=0.3e3,
+            amplitude_min=0.0,
+            amplitude_max=0.1,
+            amplitude_step=0.005,
+        ),
+        nshots=1000,
         targets=targets,
     )
     return
