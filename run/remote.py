@@ -82,6 +82,8 @@ def _():
 @app.cell
 def _(remote):
     remote.install()
+    # if needed, an environment rebuild can be foreced
+    # remote.install(rebuild=True)
     return
 
 
@@ -108,7 +110,7 @@ def _(remote):
     executor = Executor(
         None,
         path=path,
-        update=True,
+        update=False,
         reuse=True,
         confirm=True,
         runner=remote,
@@ -122,8 +124,7 @@ def _(remote):
 def _():
     mo.md("""
     The platform state is asked to the remote machine, the first time it is
-    needed: it can be explored, and edited, as a local one. Edits travel with
-    the next acquisitions.
+    needed.
     """)
     return
 
@@ -131,7 +132,6 @@ def _():
 @app.cell
 def _(executor):
     start = executor.platform_state.snapshot()
-    executor.platform_state.explore()
     return (start,)
 
 
@@ -173,20 +173,264 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ### TWPA calibration
+    """)
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # TWPA frequency amplitude sweep
+
+    # TODO: infer the "qcm_rf2/o2/lo" string from the instruments in the platform,
+    # for the time being leveraging the fact that there is a single TWPA
+    executor.platform_state.update(
+        {
+            "parameters.configs.qcm_rf2/o2/lo.power": -23.0,
+            "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
+        }
+    )
+    executor.submit(
+        protocols.twpa_frequency_offset(
+            # pump offset, relative to the configured power
+            amplitude=("linspace", 0.6, 0.999, 100),
+            frequency=("linwindow", 8.56e9, 40e6, 101),
+            probes=[
+                executor.platform_state.documents()["calibration"][
+                    "single_qubits"
+                ][str(q)]["resonator"]["dressed_frequency"]
+                for q in range(5)
+            ],
+            # probes=[7.805e9],
+            probe_amplitude=0.1,
+            probe_duration=800,
+        ),
+        nshots=200,
+        relaxation_time=1e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    If needed, you can also update the TWPA pump parameters manually:
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor):
+    # update TWPA parameters
+
+    executor.platform_state.update(
+        {
+            "parameters.configs.twpa.frequency": 8.562e9,
+            "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
+            "parameters.configs.qcm_rf2/o2/lo.power": -25.5,
+        }
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Mixer calibration
+    """)
+    return
+
+
+@app.cell
+def _(executor, targets):
+    from qibocal.protocols import calibrate_mixers
+
+    executor.submit(calibrate_mixers(), targets=targets)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ### Spectroscopies
     """)
     return
 
 
-@app.cell(expand_output=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
+    # resonator spectroscopy
+
+    # disable the TWPA for a pump-off scan
+    pump_off = False
+    if pump_off:
+        executor.platform_state.update(
+            {"parameters.configs.qcm_rf2/o2/lo.power": -60}
+        )
+
+    executor.submit(
+        protocols.resonator_spectroscopy(
+            frequency=("lincenter", 10e6, 500),
+            amplitude=0.1,
+            # power_level="high",
+        ),
+        nshots=1000,
+        relaxation_time=0.1e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # resonator punchout
+    executor.submit(
+        protocols.resonator_punchout(
+            freq_width=5e6,
+            freq_step=0.1e6,
+            min_amp=0.005,
+            max_amp=0.6,
+            step_amp=0.02,
+        ),
+        nshots=2000,
+        relaxation_time=500,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # qubit spectroscopy
+    executor.submit(
+        protocols.qubit_spectroscopy(
+            frequency=("lincenter", 20e6, 400),
+            drive_duration=8e3,
+            drive_amplitude=3e-3,
+        ),
+        nshots=500,
+        relaxation_time=2e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # qubit flux arc
     executor.submit(
         protocols.qubit_flux(
-            frequency=("linspace", 6.17e9, 6.27e9, 40),
-            bias=("lincenter", 0.3, 60),
+            frequency=("linasym", (50e6, 5e6), 80),
+            bias=("lincenter", 0.2, 80),
+        ),
+        nshots=200,
+        relaxation_time=10e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor, targets):
+    # qubit power spectroscopy
+    executor.submit(
+        protocols.qubit_power_spectroscopy(
+            frequency=("lincenter", 300e6, 1000),
+            amplitude=("linspace", 1e-3, 300e-3, 40),
+            duration=4e3,
+        ),
+        nshots=100,
+        relaxation_time=2e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor, targets):
+    # two-levels crossing
+    executor.submit(
+        protocols.two_levels_crossing(
+            drive1=("lincenter", 40e6, 100),
+            drive2=("lincenter", 40e6, 100),
+            duration=8e3,
+            amplitude=(0.02, 0.2),
+        ),
+        nshots=100,
+        relaxation_time=2e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Readout
+    """)
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # single-shot classification
+    executor.submit(
+        protocols.single_shot_classification(),
+        nshots=int(1e3),
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # dispersive shift
+    executor.submit(
+        protocols.dispersive_shift(
+            freq_width=5e6,
+            freq_step=0.05e6,
+        ),
+        nshots=500,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # readout amplitude optimization
+    executor.submit(
+        protocols.ro_amplitude(
+            amplitude_range=(0.01, 0.2, 0.01),
+        ),
+        nshots=500,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # readout amplitude optimization
+    executor.submit(
+        protocols.ro_amplitude_frequency(
+            amplitude_range=("lincenter", 0.04, 20),
+            frequency_range=("lincenter", 0.8e6, 30),
         ),
         nshots=1000,
         targets=targets,
+    )
+    return
+
+
+@app.cell
+def _(executor):
+    executor.platform_state.update(
+        {
+            "parameters.configs.4/probe.frequency": 7.809323e9,
+            "parameters.native_gates.single_qubit.4.MZ.0.1.probe.amplitude": 0.104,
+        }
     )
     return
 
@@ -199,18 +443,24 @@ def _():
     return
 
 
-@app.cell(hide_code=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
+    # rabi amplitude signal
     executor.submit(
-        protocols.single_shot_classification(),
-        nshots=int(1e3),
+        protocols.rabi_amplitude_signal(
+            min_amp=0.05,
+            max_amp=0.8,
+            step_amp=0.01,
+        ),
+        nshots=100,
         targets=targets,
     )
     return
 
 
-@app.cell(hide_code=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
+    # rabi amplitude
     executor.submit(
         protocols.rabi_amplitude(min_amp=0.01, max_amp=0.5, step_amp=0.01),
         nshots=100,
@@ -219,11 +469,70 @@ def _(executor, targets):
     return
 
 
-@app.cell(expand_output=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
+    # ramsey
     executor.submit(
-        protocols.ramsey(delay=(10, 20e3, 0.30e3)),
-        nshots=2000,
+        protocols.ramsey(
+            delay=(10, 20e3, 0.30e3),
+            detuning=0.5e6,
+        ),
+        nshots=500,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # drag simple
+    executor.submit(
+        protocols.drag_simple(
+            beta_start=-2,
+            beta_end=2,
+            beta_step=0.1,
+        ),
+        nshots=300,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # flipping
+    executor.submit(
+        protocols.flipping(
+            delta_amplitude=0.04,
+            nflips_max=30,
+            nflips_step=1,
+        ),
+        nshots=300,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # allxy
+    executor.submit(
+        protocols.allxy(),
+        nshots=300,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # standard rb
+    executor.submit(
+        protocols.standard_rb(
+            depths=[2**i for i in range(1, 10)],
+            niter=20,
+        ),
+        nshots=200,
         targets=targets,
     )
     return
@@ -237,8 +546,9 @@ def _():
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
+    # t1
     executor.submit(
         protocols.t1(
             delay_before_readout_start=1e3,
@@ -251,8 +561,9 @@ def _(executor, targets):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
+    # t2
     executor.submit(
         protocols.t2(
             delay_between_pulses_start=1e3,
@@ -265,8 +576,9 @@ def _(executor, targets):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
+    # t1 flux
     executor.submit(
         protocols.t1_flux(
             delay_min=1e3,
@@ -282,8 +594,9 @@ def _(executor, targets):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(executor, targets):
+    # t2 flux
     executor.submit(
         protocols.t2_flux(
             delay_min=0.2e3,
@@ -302,13 +615,126 @@ def _(executor, targets):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ### Flux calibration
+    """)
+    return
+
+
+@app.cell(hide_code=True, expand_output=True)
+def _(executor, targets):
+    # flux-amplitude frequency
+    executor.submit(
+        protocols.flux_amplitude_frequency(
+            amplitude_min=0.0,
+            amplitude_max=0.1,
+            amplitude_step=0.005,
+            duration=200,
+        ),
+        nshots=300,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor, targets):
+    executor.submit(
+        protocols.cryoscope(
+            duration_max=80,
+            fir=30,
+            iir=False,
+            flux_pulse_amplitude=0.1,
+        ),
+        nshots=300,
+        relaxation_time=5e3,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Two-qubit interactions
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor, targets):
+    # ramsey zz
+    executor.submit(
+        protocols.ramsey_zz(
+            delay_range=(10, 2e3, 50),
+            detuning=0.5e6,
+        ),
+        nshots=400,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(executor, targets):
+    # jazz
+    executor.submit(
+        protocols.jazz(delay_range=(10, 2e3, 50)),
+        nshots=400,
+        targets=targets,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ### Two-qubit gates
     """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _():
+    # draft
+    # for q in targets:
+    #     crl = e.cr_length(
+    #         duration_range=[10, 400, 10],
+    #         pulse_amplitude=0.3,
+    #         echo=False,
+    #         nshots=1000,
+    #         targets=[tuple(q)],
+    #     )
+
+    # cra = e.cr_amplitude(
+    #     amplitude_range=[0.01, 0.5, 0.01],
+    #     pulse_duration=161,
+    #     echo=False,
+    #     nshots=1000,
+    #     targets=[tuple(q)],
+    # )
+
+    # cpt = e.cancellation_phase_tuning(
+    #     duration_range=[10, 400, 20],
+    #     phase_range=[0.0, 6.2, 0.5],
+    #     pulse_duration=161,
+    #     echo=False,
+    #     nshots=1000,
+    #     targets=[tuple(q)],
+    # )
+
+    # co = e.correct_virtual_z_phases(
+    #     theta_start=0,
+    #     theta_end=-6.28,
+    #     theta_step=-0.1,
+    #     nshots=200,
+    #     sweep=True,
+    # )
+    return
+
+
+@app.cell(hide_code=True)
 def _(executor):
+    # chevron
     executor.submit(
         protocols.chevron(
             amplitude_min=0.01,
@@ -329,7 +755,82 @@ def _(executor):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## 5. Diffs
+    ### Qutrits
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    # draft
+
+    # qse = e.qubit_spectroscopy_ef(
+    #     frequency=("lincenter", 60e6, 200),
+    #     drive_duration=2e3,
+    #     drive_amplitude=0.3,
+    #     nshots=1000,
+    #     relaxation_time=20e3,
+    #     targets=[q],
+    # )
+
+    # rae = e.rabi_amplitude_ef(
+    #     min_amp=0.05,
+    #     max_amp=0.8,
+    #     step_amp=0.01,
+    #     pulse_length=40,
+    #     nshots=500,
+    #     targets=[q],
+    # )
+
+    # sse = e.qutrit_classification(
+    #     nshots=int(2e3),
+    #     targets=[q],
+    # )
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ## 5. Platform State
+
+    Platform holds a state...
+
+    ### Explore
+
+    It can be explored, and edited, as a local one. Edits travel with
+    the next acquisitions.
+    """)
+    return
+
+
+@app.cell
+def _(executor):
+    executor.platform_state.explore(editable=True)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Save
+
+    Persist the platform state in the folder it was loaded from.
+    """)
+    return
+
+
+@app.cell
+def _():
+    # this is not safe to be executed every time, decomment when needed
+    # executor.platform_state.save()
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### Diff
 
     Platform diffs from start, or other relevant checkpoints.
 
