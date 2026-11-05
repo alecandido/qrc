@@ -182,14 +182,6 @@ def _():
 def _(executor, targets):
     # TWPA frequency amplitude sweep
 
-    # TODO: infer the "qcm_rf2/o2/lo" string from the instruments in the platform,
-    # for the time being leveraging the fact that there is a single TWPA
-    executor.platform_state.update(
-        {
-            "parameters.configs.qcm_rf2/o2/lo.power": -23.0,
-            "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
-        }
-    )
     executor.submit(
         protocols.twpa_frequency_offset(
             # pump offset, relative to the configured power
@@ -207,6 +199,12 @@ def _(executor, targets):
         ),
         nshots=200,
         relaxation_time=1e3,
+        # TODO: infer the "qcm_rf2/o2/lo" string from the instruments in the platform,
+        # for the time being leveraging the fact that there is a single TWPA
+        platform_updates={
+            "parameters.configs.qcm_rf2/o2/lo.power": -23.0,
+            "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
+        },
         targets=targets,
     )
     return
@@ -215,22 +213,23 @@ def _(executor, targets):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    If needed, you can also update the TWPA pump parameters manually:
+    Since the former fit is not always reliable, it may be convenient to update manually.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(executor):
-    # update TWPA parameters
+def _():
+    # TWPA frequency amplitude - update
 
-    executor.platform_state.update(
-        {
-            "parameters.configs.twpa.frequency": 8.562e9,
-            "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
-            "parameters.configs.qcm_rf2/o2/lo.power": -25.5,
-        }
-    )
+    # this is not safe to be executed every time, uncomment when needed
+    # executor.platform_state.update(
+    #     {
+    #         "parameters.configs.twpa.frequency": 8.564e9,
+    #         "parameters.configs.qcm_rf2/o2/lo.frequency": 8.6e9,
+    #         "parameters.configs.qcm_rf2/o2/lo.power": -25.5,
+    #     }
+    # )
     return
 
 
@@ -412,11 +411,11 @@ def _(executor, targets):
 
 @app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
-    # readout amplitude optimization
+    # readout amplitude-frequency optimization
     executor.submit(
         protocols.ro_amplitude_frequency(
-            amplitude_range=("lincenter", 0.04, 20),
-            frequency_range=("lincenter", 0.8e6, 30),
+            amplitude_range=("lincenter", 0.004, 10),
+            frequency_range=("linwindow", 7.80924e9, 0.05e6, 10),
         ),
         nshots=1000,
         targets=targets,
@@ -424,14 +423,25 @@ def _(executor, targets):
     return
 
 
-@app.cell
-def _(executor):
-    executor.platform_state.update(
-        {
-            "parameters.configs.4/probe.frequency": 7.809323e9,
-            "parameters.native_gates.single_qubit.4.MZ.0.1.probe.amplitude": 0.104,
-        }
-    )
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    Since the former fit is not always reliable, it may be convenient to update manually.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    # readout amplitude-frequency  - update
+
+    # this is not safe to be executed every time, uncomment when needed
+    # executor.platform_state.update(
+    #     {
+    #         "parameters.configs.4/probe.frequency": 7.809229e9,
+    #         "parameters.native_gates.single_qubit.4.MZ.0.1.probe.amplitude": 0.1052,
+    #     }
+    # )
     return
 
 
@@ -474,8 +484,8 @@ def _(executor, targets):
     # ramsey
     executor.submit(
         protocols.ramsey(
-            delay=(10, 20e3, 0.30e3),
-            detuning=0.5e6,
+            delay=(10, 65e3, 1e3),
+            detuning=0.02e6,
         ),
         nshots=500,
         targets=targets,
@@ -490,9 +500,9 @@ def _(executor, targets):
         protocols.drag_simple(
             beta_start=-2,
             beta_end=2,
-            beta_step=0.1,
+            beta_step=0.05,
         ),
-        nshots=300,
+        nshots=1000,
         targets=targets,
     )
     return
@@ -503,11 +513,11 @@ def _(executor, targets):
     # flipping
     executor.submit(
         protocols.flipping(
-            delta_amplitude=0.04,
-            nflips_max=30,
+            delta_amplitude=0.005,
+            nflips_max=100,
             nflips_step=1,
         ),
-        nshots=300,
+        nshots=500,
         targets=targets,
     )
     return
@@ -516,11 +526,12 @@ def _(executor, targets):
 @app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
     # allxy
-    executor.submit(
+    pending = executor.submit(
         protocols.allxy(),
         nshots=300,
         targets=targets,
     )
+    pending
     return
 
 
@@ -529,7 +540,7 @@ def _(executor, targets):
     # standard rb
     executor.submit(
         protocols.standard_rb(
-            depths=[2**i for i in range(1, 10)],
+            depths=[2**i for i in range(1, 11)],
             niter=20,
         ),
         nshots=200,
@@ -546,13 +557,13 @@ def _():
     return
 
 
-@app.cell(hide_code=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
     # t1
     executor.submit(
         protocols.t1(
             delay_before_readout_start=1e3,
-            delay_before_readout_end=20e3,
+            delay_before_readout_end=65e3,
             delay_before_readout_step=0.5e3,
         ),
         nshots=200,
@@ -561,16 +572,16 @@ def _(executor, targets):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell(hide_code=True, expand_output=True)
 def _(executor, targets):
     # t2
     executor.submit(
         protocols.t2(
             delay_between_pulses_start=1e3,
-            delay_between_pulses_end=20e3,
+            delay_between_pulses_end=65e3,
             delay_between_pulses_step=0.5e3,
         ),
-        nshots=200,
+        nshots=400,
         targets=targets,
     )
     return
@@ -625,12 +636,12 @@ def _(executor, targets):
     # flux-amplitude frequency
     executor.submit(
         protocols.flux_amplitude_frequency(
-            amplitude_min=0.0,
+            amplitude_min=-0.01,
             amplitude_max=0.1,
             amplitude_step=0.005,
-            duration=200,
+            duration=50,
         ),
-        nshots=300,
+        nshots=200,
         targets=targets,
     )
     return
@@ -822,7 +833,7 @@ def _():
 
 @app.cell
 def _():
-    # this is not safe to be executed every time, decomment when needed
+    # this is not safe to be executed every time, uncomment when needed
     # executor.platform_state.save()
     return
 

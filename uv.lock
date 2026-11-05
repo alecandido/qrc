@@ -2752,7 +2752,7 @@ tests = [
 [[package]]
 name = "qibocal-widgets"
 version = "0.0.1"
-source = { git = "https://github.com/qiboteam/qibocal-widgets?branch=main#ddc8e41a451b39ebabeca185266be2ad35cef10f" }
+source = { git = "https://github.com/qiboteam/qibocal-widgets?branch=main#1a0ef4bbdf66466627d67895175646dee56f3218" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
