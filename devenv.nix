@@ -1,5 +1,8 @@
-{ config, pkgs, ... }:
 {
+  config,
+  pkgs,
+  ...
+}: {
   packages = with pkgs; [
     prek
     poethepoet
@@ -12,15 +15,13 @@
 
   languages.python = {
     enable = true;
-    libraries = with pkgs; [ zlib ];
-    # latest release in the nixpkgs-python cache: never build the interpreter
-    version = "3.13.17";
+    libraries = with pkgs; [zlib];
     venv.enable = true;
     uv = {
       enable = true;
       sync = {
         enable = true;
-        arguments = [ "--locked" ];
+        arguments = ["--locked"];
         groups = [
           "dev"
           "qblox"
