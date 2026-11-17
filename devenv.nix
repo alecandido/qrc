@@ -15,6 +15,7 @@
 
   languages.python = {
     enable = true;
+    version = "3.12.14";
     libraries = with pkgs; [zlib];
     venv.enable = true;
     uv = {

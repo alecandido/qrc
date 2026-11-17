@@ -51,7 +51,7 @@ def _():
 
 @app.cell
 def _():
-    remote = Remote("platinum")
+    remote = Remote("tuna")
     mo.vstack(
         [
             mo.md(f"`{remote!r}`"),
